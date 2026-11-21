@@ -22,12 +22,13 @@
 import { DIALOGUE, lineEnd } from './timeline.js';
 import { F, off } from './world.js';
 import * as cb from './combat.js';
+import { collectLootNear } from './beat7.js';
 import { buildGauntlet, GAUNTLET_TIP } from './art/gauntlet.js';
 import { clamp, inv, easeOut, easeOutBack } from './util.js';
 import { num, numWidth } from './pixfont.js';
 import { HUD, boxBottom } from './ui.js';
 
-const NUDGE = { pointer: 6, line: 11 };          // after the intro, if the coins just sit there
+const NUDGE = { pointer: 6, line: 15, pulse: 30 };          // after the intro, if the coins just sit there
 let D = null, GAUNT = null, GAUNT_P = null, SPOT3 = null;
 const params = new URLSearchParams(location.search);
 // ?coins=N — scripted coin taps (N resting coins get pocketed as soon as they're up) for screenshots
@@ -36,7 +37,7 @@ const SCRIPTED = parseInt(params.get('coins') || '0', 10) || 0;
 export function buildBeat3() { GAUNT = buildGauntlet(false); GAUNT_P = buildGauntlet(true); SPOT3 = cb.buildSpot(26, 60, 1.2); }
 
 export function reset() {
-  D = { introAt: null, armedAt: null, nudged: false, collected: 0, lost: 0, doneAt: null, firstTap: null,
+  D = { introAt: null, armedAt: null, nudged: false, chimeAt: 0, collected: 0, lost: 0, doneAt: null, firstTap: null,
         ripples: [], taps: Array(SCRIPTED).fill(0), ti: 0, nextTap: 0, lastS: null };
 }
 reset();
@@ -60,10 +61,12 @@ export function debug() {
 // a tap on a resting coin pockets it; taps elsewhere fall through to Beat 2's rat check
 export function click(gx, gy, t) {
   if (!D || !cb.E) return false;
-  const s = cb.warp(t);
-  const c = cb.coinAtPoint(gx, gy, s, off(1, F.ground));
+  const s = cb.warp(t), og = off(1, F.ground);
+  const c = cb.coinAtPoint(gx, gy, s, og);
   if (!c) return false;
-  D.collected += cb.collectCoinSplash(c, s, off(1, F.ground));   // the gauntlet sweeps the neighbours up too
+  const [cx, cy] = cb.coinPosAt(c, s, og);
+  D.collected += cb.collectCoinSplash(c, s, og, 36);   // the gauntlet sweeps the neighbours up too
+  collectLootNear(cx, cy, s, 48);                    // ...and any nearby dropped loot
   if (D.firstTap === null) D.firstTap = s;
   D.ripples.push({ t, gx, gy, hit: true, splash: true });
   if (D.ripples.length > 24) D.ripples.shift();
@@ -104,8 +107,12 @@ export function step(t) {
       D.nextTap = s + 0.9;
     }
   }
-  // a nudge if the coins are just sitting there
+  // nudges if the coins are just sitting there: 15s Elminster quip, 30s gold pulse + chime
   if (!D.nudged && resting(s).length && s >= D.introAt + NUDGE.line && !busyLine(s)) { D.nudged = true; say('coinNudge', s); }
+  if (D.firstTap === null && resting(s).length && s >= D.introAt + NUDGE.pulse && s >= D.chimeAt) {
+    cb.E.live.push({ s, k: 'chime' });
+    D.chimeAt = s + 2.5;
+  }
   // the 5 s countdown starts once the fight is over — nobody pockets loot mid-swing
   if (D.armedAt === null) {
     const b2 = cb.E.rats.filter(r => r.b2 !== undefined);
@@ -114,11 +121,18 @@ export function step(t) {
   }
   for (const c of hc) {
     if (c.fly !== undefined || c.roll !== undefined) continue;
+    if (cb.E.autoCollect && s >= c.land + 0.16) {
+      cb.collectCoin(c, s);
+      D.collected++;
+      if (D.firstTap === null) D.firstTap = s;
+      continue;
+    }
     // Beat 3 arms the countdown only for the coins already on the ground when the fight ended;
     // goblin copper (Beat 5) gets its own shorter fuse, armed by beat5.js as it lands
     if (!c.armed) { if (D.armedAt !== null && c.land <= D.armedAt + 0.01) { c.armed = true; c.expire = D.armedAt + 5 + c.j * 0.45; } }
     else if (s >= c.expire) { cb.loseCoin(c, s); D.lost++; }
   }
+  D.collected = Math.max(D.collected, hc.filter(c => c.fly !== undefined).length);
   // the closing line once every coin is pocketed or gone (and the fight has produced all its coins)
   if (D.doneAt === null && hc.length && hc.every(resolved) && !busyLine(s)) {
     say(D.lost === 0 ? 'line8a' : 'line8b', s + 0.35);
@@ -137,8 +151,9 @@ function drawBanner(ctx, s) {
   const k = easeOutBack(clamp((s - D.introAt - 0.4) / 0.3)), gone = out > 0.9 ? easeOut((out - 0.9) / 0.5) : 0;
   const X = Math.round(HUD.x + HUD.w / 2 - w / 2), Y = Math.round(boxBottom() + 3 - (1 - k) * 8 - gone * 10);
   ctx.globalAlpha = clamp(k) * (1 - gone);
+  const pulse = done === null && D.firstTap === null && s >= D.introAt + NUDGE.pulse ? Math.abs(Math.sin(s * 3.2)) : 0;
   ctx.fillStyle = '#140b0c'; ctx.fillRect(X - 1, Y - 1, w + 2, h + 2);
-  ctx.fillStyle = done !== null ? '#3c6a2a' : '#5a2a14'; ctx.fillRect(X, Y, w, h);
+  ctx.fillStyle = done !== null ? '#3c6a2a' : pulse > 0.5 ? '#8a5a12' : '#5a2a14'; ctx.fillRect(X, Y, w, h);
   ctx.fillStyle = done !== null ? '#5c9a40' : '#7a4020'; ctx.fillRect(X, Y, w, 1);
   ctx.fillStyle = '#e8b85a'; ctx.fillRect(X + 1, Y + 1, w - 2, 1); ctx.fillRect(X + 1, Y + h - 2, w - 2, 1);
   const bx = X + 7, by = Y + 7;
@@ -192,10 +207,15 @@ export function drawOverlay(ctx, uctx, p, t) {
     const on = Math.floor((s - D.introAt) * 2.2) % 3 !== 2;
     const bob = Math.round(Math.sin(s * 4) * 1.5);
     if (on) num(ctx, 'TAP!', Math.round(cx - numWidth('TAP!')), Math.round(cy - 26 + bob), ['#ffe9a0', '#fff8dc'], 'l', { scale: 2 });
-    // the gauntlet bobs up at the coin from just below, tapping the air
+  }
+  // the gauntlet bobs up at the coin after 6s, tapping the air
+  if (s > D.introAt + NUDGE.pointer) {
+    const gk = easeOut(clamp((s - D.introAt - NUDGE.pointer) / 0.3));
+    const bob = Math.round(Math.sin(s * 4) * 1.5);
     const press = Math.sin(s * 4) > 0.55;
     const g = press ? GAUNT_P : GAUNT;
-    ctx.drawImage(g, Math.round(cx + 7 - GAUNTLET_TIP[0]), Math.round(cy + 7 + (press ? 1 : 0) + bob - GAUNTLET_TIP[1]));
+    ctx.globalAlpha = clamp(fade) * gk;
+    ctx.drawImage(g, Math.round(cx + 7 - GAUNTLET_TIP[0]), Math.round(cy + 7 + (press ? 1 : 0) + bob + (1 - gk) * 8 - GAUNTLET_TIP[1]));
   }
   ctx.globalAlpha = 1;
 }

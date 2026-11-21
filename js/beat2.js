@@ -84,8 +84,9 @@ export function click(gx, gy, t) {
   if (D.firstTap !== null) {
     if (q - D.lastTapS < 0.14) return false;                       // hand throttle
     if (q < D.lastStrikeAt + 2.2) return false;       // the gauntlet needs a breath between shouts (not a whole round)
-    D.lastTapS = q;
   }
+  D.lastTapS = q;
+  D.lastStrikeAt = q;
   D.taps.push({ s: q, rat: id }); D.taps.sort((a, b) => a.s - b.s);
   return true;
 }
@@ -154,12 +155,18 @@ function cueLive(s, k, o = {}) { cb.E.live.push({ s, k, ...o }); }
 function commandStrike(s, r) {
   if (s - D.lastCS < 0.09) return;                         // even a fighter can only bark so fast
   D.lastCS = s;
-  const roll = 2 + Math.floor(D.rng() * 6) + Math.floor(D.rng() * 6) + cb.RULES.dmgBonus;   // a weapon hit…
-  const dmg = Math.max(1, Math.round(roll * cb.RULES.csPct));                                // …10% of it
-  const n = D.n++;
-  const word = n === 0 ? 'HA!' : ['HA!', 'HUP!', 'HA!', 'HAH!', 'OI!'][Math.floor(D.rng() * 5)];
-  cb.setFocus(s, r.id);
-  cb.addStrike({ at: s + 0.05, rat: r.id, dmg, word, n });
+  D.lastStrikeAt = s;
+  const count = 1 + (cb.E.extraStrikes || 0);
+  for (let k = 0; k < count; k++) {
+    const tgt = r.dieAt === undefined ? r : alive(s)[0];
+    if (!tgt) break;
+    const roll = 2 + Math.floor(D.rng() * 6) + Math.floor(D.rng() * 6) + cb.RULES.dmgBonus;   // a weapon hit…
+    const dmg = Math.max(1, Math.round(roll * cb.RULES.csPct * (cb.E.strikeMult || 1)));       // …10% of it (scaled by Tactics)
+    const n = D.n++;
+    const word = n === 0 ? 'HA!' : ['HA!', 'HUP!', 'HA!', 'HAH!', 'OI!'][Math.floor(D.rng() * 5)];
+    if (k === 0) cb.setFocus(s, tgt.id);
+    cb.addStrike({ at: s + 0.05 + k * 0.07, rat: tgt.id, dmg, word, n });
+  }
   D.csTimes.push(s);
   if (D.firstTap === null) {
     D.firstTap = s;
@@ -200,7 +207,7 @@ function heroTurn(s) {
       return;
     }
     const roll = 1 + Math.floor(D.rng() * 20);
-    const nd = roll === 20 ? 4 : 2;                                   // a natural 20 rolls the damage dice twice
+    const nd = roll >= (cb.E.critRange || 20) ? 4 : 2;                // a crit rolls the damage dice twice
     const dice = Array.from({ length: nd }, () => 1 + Math.floor(D.rng() * 6));
     rd.sw = cb.addSwing({ at: rd.at, rat: -1, roll, dice, live: true });
   }
@@ -219,7 +226,7 @@ function heroTurn(s) {
     }
     const left = alive(s).filter(r => isFinite(r.meleeAt));
     D.round = null;
-    if (left.length) startRound(sw.at, sw.at + cb.RULES.round);
+    if (left.length) startRound(sw.at, sw.at + cb.RULES.round * (cb.E.roundMult || 1));
   }
 }
 
@@ -245,7 +252,7 @@ function regen(s) {
   const engaged = cb.engagedFoes(s);
   let lastHurt = -9; for (const b of cb.E.bites) if (!b.void && b.at <= s) lastHurt = Math.max(lastHurt, b.at);
   if (engaged || s - lastHurt < 2.2 || s < D.nextRegen) return;
-  if (cb.heroHP(s) < cb.RULES.heroHP) { cb.addHeal(s, 1); D.nextRegen = s + 1.1; }
+  if (cb.heroHP(s) < cb.heroMaxHP()) { cb.addHeal(s, 1, 'regen'); D.nextRegen = s + 1.1 / (cb.E.regenMult || 1); }
 }
 
 // ---------- queries for main.js ----------

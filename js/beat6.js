@@ -42,6 +42,7 @@ const DONER = { x: 306, y: 252, w: 60, h: 26 };      // panel-relative
 const NAVR = [{ x: 14, y: 252, w: 30, h: 26 }, { x: 48, y: 252, w: 30, h: 26 }]; // PREV / NEXT
 const PIP0 = { x: 40, y: 41 };                       // first rank pip, card-relative
 const BUYROW = { y: 138, h: 30 };                    // the buy strip, card-relative
+const NUDGE = { pointer: 6, line: 15, pulse: 30 };
 
 let D = null, A = null, SPOT6 = null;
 
@@ -51,14 +52,15 @@ function t2(str, font, col, opts = {}) {
   const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
   let x1 = 0, y0 = c.height, y1 = 0;
   for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) if (d[(y * c.width + x) * 4 + 3]) { if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
-  c.inkW = Math.max(1, x1 - 4 + 1); c.inkTop = y0 === c.height ? 0 : y0;
+  c.inkW = Math.max(1, x1 - 4 + 1); c.inkTop = y0 === c.height ? 0 : y0; c.inkH = y1 >= y0 ? y1 - y0 + 1 : 0;
   return c;
 }
-const put = (u, img, gx, gy, align = 'l') => {
+const put = (u, img, gx, gy, align = 'l', valign = 't') => {
   let X = gx * S - 4;
   if (align === 'c') X = Math.round(gx * S - img.inkW / 2) - 4;
   else if (align === 'r') X = Math.round(gx * S - img.inkW) - 4;
-  u.drawImage(img, Math.round(X), Math.round(gy * S - img.inkTop));
+  const Y = valign === 'm' ? gy * S - img.inkTop - img.inkH / 2 : gy * S - img.inkTop;
+  u.drawImage(img, Math.round(X), Math.round(Y));
 };
 
 // ---------- little pixel icons, one per drill (20×20 bitmaps) ----------
@@ -293,7 +295,7 @@ export function buildBeat6() {
 
 // ---------- state ----------
 export function reset() {
-  D = { Eref: cb.E, tNow: 0, line12aAt: null, nudged: false, pulseShown: false, pulseKind: null,
+  D = { Eref: cb.E, tNow: 0, line12aAt: null, nudged: false, chimeAt: 0, pulseShown: false, pulseKind: null,
         openAt: null, closeAt: null, pressAt: null, boughtAt: null, lastBuyAt: null, lastBuyIdx: 0, lastCost: 0,
         ranks: TRACKS.map(() => 0), sel: 0, spent: 0, mile: null, quips: [],
         line12said: false, doneAt: null, wasAfford: false, hintUntil: -1 };
@@ -460,19 +462,20 @@ export function step(t) {
     D.line12aAt = s + 0.1; say('line12a', D.line12aAt); setTileLocked('train', false);
     return;
   }
-  // the tab pulses until rank 1 is bought; afterwards it gives a brief gold
-  // hop whenever some drill is freshly affordable
+  // nudges while waiting on first purchase (6s pointer, 15s quip, 30s gold pulse + chime),
+  // plus a brief gold hop whenever some drill is freshly affordable afterwards
+  const tutor = D.openAt === null && D.boughtAt === null;
+  const tutorPulse = tutor && s >= D.line12aAt + NUDGE.pulse;
   const afford = cb.hudState(t).cp >= cheapest();
   if (afford && !D.wasAfford && D.boughtAt !== null) D.hintUntil = t + 2.5;
   D.wasAfford = afford;
-  const pulse = D.openAt === null && (D.boughtAt === null || (afford && t < D.hintUntil));
+  const pulse = D.openAt === null && (tutorPulse || (D.boughtAt !== null && afford && t < D.hintUntil));
   if (pulse !== D.pulseShown) { D.pulseShown = pulse; setTrainPulse(pulse); }
   D.pulseKind = D.boughtAt === null ? 'tutor' : 'hint';
-  if (!D.nudged && D.openAt === null && D.boughtAt === null && s > lineEnd(DIALOGUE.line12a) + 9 && !busyLine(s)) {
+  if (tutorPulse && s >= D.chimeAt) { cb.E.live.push({ s, k: 'chime' }); D.chimeAt = s + 2.5; }
+  if (!D.nudged && tutor && s >= D.line12aAt + NUDGE.line && !busyLine(s)) {
     D.nudged = true; say('trainNudge', s);
   }
-  // the first purchase: the panel takes its bow and closes behind the flourish
-  if (D.boughtAt !== null && !D.line12said && D.openAt !== null && D.closeAt === null && t > D.boughtAt + 1.7) closeScreen(t);
   if (D.closeAt !== null && t > D.closeAt + 0.28) { D.openAt = null; D.closeAt = null; }
   if (D.boughtAt !== null && D.openAt === null && D.closeAt === null && !D.line12said && !busyLine(s)) {
     D.line12said = true; say('line12', s + 0.3);
@@ -486,7 +489,7 @@ export function step(t) {
 
 // ---------- spotlights (before the dialogue box, like Beat 4) ----------
 export function drawSpot(ctx, p, t) {
-  if (!D || !D.pulseShown || D.pulseKind !== 'tutor' || D.openAt !== null) return;
+  if (!D || D.line12aAt === null || D.boughtAt !== null || D.openAt !== null) return;
   const s = cb.warp(t);
   const k = easeOut(clamp((s - D.line12aAt) / 0.5));
   if (k <= 0) return;
@@ -504,17 +507,18 @@ export function drawOverlay(ctx, uctx, p, t) {
   if (D.openAt !== null) drawScreen(ctx, uctx, t, s);
 }
 
-// the objective tag under Elminster's box: OPEN THE TRAINING YARD, until it's open
+// the objective tag under Elminster's box: OPEN THE TRAINING YARD, until it's bought
 function drawBanner(ctx, s) {
-  if (!D.pulseShown || D.pulseKind !== 'tutor' || D.openAt !== null) return;
+  if (D.boughtAt !== null || D.openAt !== null) return;
   const at = DIALOGUE.line12a.at;
   if (s < at + 0.4) return;
   const label = 'OPEN THE TRAINING YARD', w = numWidth(label) + 20, h = 15;
   const k = easeOutBack(clamp((s - at - 0.4) / 0.3));
   const X = Math.round(HUD.x + HUD.w / 2 - w / 2), Y = Math.round(boxBottom() + 3 - (1 - k) * 8);
+  const pulse = s >= D.line12aAt + NUDGE.pulse ? Math.abs(Math.sin(s * 3.2)) : 0;
   ctx.globalAlpha = clamp(k);
   ctx.fillStyle = '#140b0c'; ctx.fillRect(X - 1, Y - 1, w + 2, h + 2);
-  ctx.fillStyle = '#5a3414'; ctx.fillRect(X, Y, w, h);
+  ctx.fillStyle = pulse > 0.5 ? '#8a5a12' : '#5a3414'; ctx.fillRect(X, Y, w, h);
   ctx.fillStyle = '#7e4c20'; ctx.fillRect(X, Y, w, 1);
   ctx.fillStyle = '#e8b85a'; ctx.fillRect(X + 1, Y + 1, w - 2, 1); ctx.fillRect(X + 1, Y + h - 2, w - 2, 1);
   const bx = X + 7, by = Y + 7;
@@ -524,10 +528,10 @@ function drawBanner(ctx, s) {
   ctx.globalAlpha = 1;
 }
 
-// a gold chevron bobbing over the pulsing Train tile
+// a gold chevron bobbing over the Train tile after 6s
 function drawPointer(ctx, s) {
-  if (!D.pulseShown || D.pulseKind !== 'tutor' || D.openAt !== null) return;
-  const k = easeOut(clamp((s - D.line12aAt - 0.3) / 0.4));
+  if (D.boughtAt !== null || D.openAt !== null) return;
+  const k = easeOut(clamp((s - D.line12aAt - NUDGE.pointer) / 0.4));
   if (k <= 0) return;
   const bob = Math.round(Math.sin(s * 4.4) * 1.5);
   const cx = TILE.x + 13, cy = TILE.y - 11 + bob;
@@ -623,9 +627,9 @@ function drawScreen(ctx, uctx, t, s) {
     put(uctx, T.fxNext, ax + 17, cy0 + 97);
     put(uctx, T.note2, cx0 + 14, cy0 + 114);
     if (!afford) put(uctx, A.txt.short, cx0 + 14, cy0 + 125);
-    put(uctx, T.buySh, cx0 + CARDW / 2 - 8, by + 8.5 + (pressed ? 1 : 0), 'c');
-    put(uctx, T.buy, cx0 + CARDW / 2 - 8, by + 7.5 + (pressed ? 1 : 0), 'c');
-    put(uctx, A.txt.cp, ccx0 + 10 + numWidth(costStr) + 3, by + 13);
+    put(uctx, T.buySh, cx0 + CARDW / 2 - 8, by + BUYROW.h / 2 + 1 + (pressed ? 1 : 0), 'c', 'm');
+    put(uctx, T.buy, cx0 + CARDW / 2 - 8, by + BUYROW.h / 2 + (pressed ? 1 : 0), 'c', 'm');
+    put(uctx, A.txt.cp, ccx0 + 10 + numWidth(costStr) + 3, by + BUYROW.h / 2, 'l', 'm');
 
     // the purchase flourish: the drill's gain floats up off the card
     if (popD >= 0 && popD < 1.8) {
@@ -676,29 +680,19 @@ function drawScreen(ctx, uctx, t, s) {
       } else D.mile = null;
     }
 
-    // the locked paths: greyed out, chained corner to corner, padlocked — the Yard teaches only the sword, for now
+    // the locked paths: greyed out and padlocked — the Yard teaches only the sword, for now
     if (lockedTrack(i)) {
       u.globalAlpha = ak * 0.6;
       R(cx0 + 2, cy0 + 2, CARDW - 4, CARDH - 4, '#43404e');
       u.globalAlpha = ak;
-      for (const dir of [1, -1]) {                       // two chains, corner to corner
-        const steps = 30;
-        for (let q = 0; q <= steps; q++) {
-          const f = q / steps;
-          const lx = cx0 + 8 + f * (CARDW - 16);
-          const ly = cy0 + 6 + (dir > 0 ? f : 1 - f) * (CARDH - 12);
-          if (q % 2 === 0) { R(lx - 3, ly - 1, 7, 3, '#2a2a33'); R(lx - 2, ly, 5, 1, '#65616f'); }
-          else { R(lx - 1, ly - 3, 3, 7, '#2a2a33'); R(lx, ly - 2, 1, 5, '#65616f'); }
-        }
-      }
       const lcx = cx0 + CARDW / 2, lcy = cy0 + CARDH / 2;
       IMG(A.lock, lcx - 9, lcy - 12);
       // the buy strip reads the verdict
       u.globalAlpha = ak * 0.88;
       R(cx0 + 9, cy0 + BUYROW.y + 1, CARDW - 18, BUYROW.h - 2, '#221c28');
       u.globalAlpha = ak;
-      put(uctx, A.txt.lockedSh, lcx, cy0 + BUYROW.y + 10.5, 'c');
-      put(uctx, A.txt.locked, lcx, cy0 + BUYROW.y + 9.5, 'c');
+      put(uctx, A.txt.lockedSh, lcx, cy0 + BUYROW.y + BUYROW.h / 2 + 1, 'c', 'm');
+      put(uctx, A.txt.locked, lcx, cy0 + BUYROW.y + BUYROW.h / 2, 'c', 'm');
     }
   }
 
@@ -734,11 +728,11 @@ function drawScreen(ctx, uctx, t, s) {
   }
 
   // ---- the panel's own text ----
-  put(uctx, A.txt.titleSh, px + PANW / 2, py + 16.5, 'c');
-  put(uctx, A.txt.title, px + PANW / 2, py + 15.5, 'c');
+  put(uctx, A.txt.titleSh, px + PANW / 2, py + 26.5, 'c', 'm');
+  put(uctx, A.txt.title, px + PANW / 2, py + 25.5, 'c', 'm');
   put(uctx, A.txt.six, px + PANW / 2, py + 232, 'c');
-  put(uctx, A.txt.doneSh, dr.x + dr.w / 2, dr.y + 7.5, 'c');
-  put(uctx, A.txt.doneLbl, dr.x + dr.w / 2, dr.y + 6.5, 'c');
+  put(uctx, A.txt.doneSh, dr.x + dr.w / 2, dr.y + dr.h / 2 + 1, 'c', 'm');
+  put(uctx, A.txt.doneLbl, dr.x + dr.w / 2, dr.y + dr.h / 2, 'c', 'm');
   put(uctx, A.txt.hint, dr.x - 10, py + 257, 'r');
   uctx.globalAlpha = 1;
 }

@@ -134,7 +134,7 @@ function heroTurn(s) {
     // the crit waits for him — unless the player's taps got him first, in which case fate picks another
     const isCrit = !D.critDone && guess >= 0 && ((fatedOk && guess === fated.id) || (fatedDead && cb.E.rats[guess].gob));
     const roll = isCrit ? 20 : 1 + Math.floor(D.rng() * 20);
-    const dice = isCrit ? [6, 5, 6, 5] : Array.from({ length: roll === 20 ? 4 : 2 }, () => 1 + Math.floor(D.rng() * 6));
+    const dice = isCrit ? [6, 5, 6, 5] : Array.from({ length: roll >= (cb.E.critRange || 20) ? 4 : 2 }, () => 1 + Math.floor(D.rng() * 6));
     rd.sw = cb.addSwing({ at: rd.at, rat: -1, roll, dice, live: true, ...(isCrit ? { launch: true, linger: 1.7 } : {}) });
     if (isCrit) { rd.sw.rat = fatedOk ? fated.id : guess; D.critAt = rd.at; D.critDone = true; }
   }
@@ -156,7 +156,7 @@ function heroTurn(s) {
     }
     const left = aliveNow(s).filter(r => isFinite(r.meleeAt));
     D.round = null;
-    if (left.length) startRound(sw.at, sw.at + cb.RULES.round);
+    if (left.length) startRound(sw.at, sw.at + cb.RULES.round * (cb.E.roundMult || 1));
   }
 }
 

@@ -10,7 +10,7 @@
 //                 └ route     stage nodes to the next boss (the "horizon" goal)
 //    top-right   PURSE        coin count, speed / auto / sound toggles
 //    right edge  NEXT STAGE   bookmark tab, padlocked until the quota is full
-//    bottom-right ACTION BELT ability sockets [1][2][3] · Train / Gear / Hero [T][G][H]
+//    bottom-right ACTION BELT ability sockets [1][2] · Train / Gear / Hero [T][G][H]
 //                 └ NOW tag   the cheapest useful purchase
 //
 //  Materials match the dialogue box: oiled oak, dark leather, brass, iron,
@@ -50,14 +50,16 @@ export function setHudMuted(m) { muted = m; }
 let trainPulse = false, trainOpen = false;
 export function setTrainPulse(on) { trainPulse = on; }
 export function setTrainingOpen(on) { trainOpen = on; }
-let gearPulse = false;
+let gearPulse = false, gearBadge = 0, gearFlashAt = -9;
 export function setGearPulse(on) { gearPulse = on; }
-// the Train/Gear tiles sit behind chains until Elminster points them out (Beats 6 & 8)
-const tileLock = { train: true, gear: true, hero: false };
+export function flashGearTile() { gearFlashAt = performance.now() / 1000; }
+export function setGearBadge(n) { gearBadge = Math.max(0, n | 0); }
+export function addGearBadge(n = 1) { gearBadge = Math.max(0, (gearBadge + n) | 0); }
+// the Train/Gear/Hero tiles and Second Wind socket sit behind padlocks until unlocked
+const tileLock = { train: true, gear: true, hero: true };
 export function setTileLocked(k, on) { tileLock[k] = on; }
-// Beat 9: Action Surge leaves its socket's padlock behind at level 2
-let surgeLocked = true;
-export function setSurgeLocked(on) { surgeLocked = on; }
+let windLocked = true;
+export function setWindLocked(on) { windLocked = on; }
 export function rebuildNow(rank, cp) {
   if (!Hd.text) return;                       // before buildHUD, the boot-time reset has nothing to rebuild
   Hd.text.now = tx('Weapon Drills R' + rank, 16, INK, { sh: null });
@@ -225,14 +227,7 @@ function iconStarUp() {                                  // "level up" chevron
   r.set(4, 1, G[3]); r.set(4, 2, G[3]);
   return OL(r);
 }
-function iconSurge(gray = false) {                      // Action Surge: a twin burst of chevrons
-  const pal = gray ? ['#2b2a33', '#4b4856', '#65616f', '#878394', '#b2afbd'] : ['#5a1a08', '#a8361a', '#e8642a', '#ffa64a', '#ffe7a0'];
-  const r = new Raster(14, 14), F = P(pal);
-  const chev = (ox, k) => { for (let i = 0; i < 6; i++) for (let w = 0; w < 3; w++) { r.set(ox + i + w, 1 + i, F[k]); r.set(ox + i + w, 12 - i, F[k - 1]); } };
-  chev(0, 3); chev(5, 4);
-  r.set(10, 6, F[4]); r.set(11, 6, F[4]); r.set(10, 7, F[3]); r.set(11, 7, F[3]);
-  return OL(r);
-}
+
 function iconWind() {                                   // Second Wind: a heart caught up in a rising gust
   const r = new Raster(15, 14);
   const H = P(['#5a0f18', '#9e1e2a', '#d6383c', '#f6685a', '#ffb8a0']);
@@ -408,11 +403,12 @@ function tx(str, size = 16, color = CREAM, { bold = false, sh = SHADOW, spacing 
   return out;
 }
 // draw text so its ink's top-left lands at native (gx, gy); align: 'l' | 'c' | 'r'
-function putText(u, img, gx, gy, align = 'l') {
+function putText(u, img, gx, gy, align = 'l', valign = 't') {
   let X = gx * S - 4;
   if (align === 'c') X = Math.round(gx * S - img.inkW / 2) - 4;
   if (align === 'r') X = gx * S - img.inkW - 4;
-  u.drawImage(img, Math.round(X), Math.round(gy * S - img.inkTop));
+  const Y = valign === 'm' ? gy * S - img.inkTop - img.inkH / 2 : gy * S - img.inkTop;
+  u.drawImage(img, Math.round(X), Math.round(Y));
 }
 
 // ============================================================
@@ -421,7 +417,7 @@ function putText(u, img, gx, gy, align = 'l') {
 export function buildHUD() {
   Hd.icons = {
     heart: iconHeart(), cp: iconCoin('cp'), pouch: iconPouch(), skull: iconSkull(), lock: iconLock(), rat: iconRat(),
-    surge: iconSurge(), surgeG: iconSurge(true), surgeMini: iconSurgeMini(), wind: iconWind(), potion: iconPotion(),
+    surgeMini: iconSurgeMini(), wind: iconWind(), potion: iconPotion(),
     train: iconTraining(), helm: iconHelm(), sheet: iconSheet(), speed: iconSpeed(),
     sound: iconSound(false), soundOff: iconSound(true), arrow: iconArrow(),
   };
@@ -446,6 +442,7 @@ export function buildHUD() {
   Hd.belt = buildBelt();
   Hd.next = buildNext();
   Hd.route = buildRoute();
+  Hd.routeActive = buildRouteActive();
   Hd.soon = buildSoon();
   Hd.now = buildNow('10');
 }
@@ -574,8 +571,8 @@ function drawSign(c, u, ox, oy, t, st) {
   // the next empty pocket breathes: "fill me"
   if (quota < 10) { const a = 0.10 + 0.10 * (0.5 + 0.5 * Math.sin(t * 4)); c.fillStyle = `rgba(255,196,90,${a.toFixed(3)})`; c.fillRect(X + SEG0 + quota * SEGW, Y + 21, SEGW - 1, 7); }
   putText(u, Hd.text.stageLbl, X + 14, Y + 7, 'c');
-  num(c, '1', X + 14, Y + 13, ['#fff1c8', '#ffffff', '#f6d0a0'], 'c', { outline: '#3a0c14', scale: 2 });
-  putText(u, Hd.text.title, X + 96, Y + 7, 'c');
+  num(c, String(st.stage || 1), X + 14, Y + 13, ['#fff1c8', '#ffffff', '#f6d0a0'], 'c', { outline: '#3a0c14', scale: 2 });
+  putText(u, Hd.text.title, X + 96, Y + 11, 'c', 'm');
   if (dq >= 0 && dq < 0.4 && quota > 0) {       // the pocket just filled flares white, then settles to amber
     const sx = X + SEG0 + (quota - 1) * SEGW; c.globalAlpha = 1 - dq / 0.4; fill(c, '#fff6d8', sx - 1, Y + 20, SEGW + 1, 9); c.globalAlpha = 1;
   }
@@ -585,23 +582,56 @@ function drawSign(c, u, ox, oy, t, st) {
 
 // ---------- ROUTE to the boss (under the sign) ----------
 const ROUTE = { x: 268, y: 35, w: 120, h: 14 };
-function buildRoute() {
-  const [c, x] = makeCanvas(ROUTE.w, ROUTE.h);
-  const nodes = [6, 20, 34, 48, 62];
-  for (let i = 0; i < 4; i++) for (let px = nodes[i] + 4; px < nodes[i + 1] - 3; px += 2) { fill(x, O, px, 6, 1, 3); fill(x, '#e9d3a6', px, 7, 1, 1); }
-  ring(x, 6, 7, 5, 1.5);
-  fill(x, '#c8303a', 5, 6, 2, 2); fill(x, '#ff8a72', 5, 6, 1, 1);
-  for (const n of nodes.slice(1, 4)) { fill(x, O, n - 2, 5, 5, 5); fill(x, '#a99a86', n - 1, 6, 3, 3); fill(x, '#e9dcc4', n - 1, 6, 1, 1); }
-  fill(x, O, 55, 0, 14, 14); fill(x, '#3a1a2a', 56, 1, 12, 12); fill(x, '#5a2a40', 56, 1, 12, 1);
-  x.drawImage(Hd.icons.skull, 56, 2);
+const routeNodes = () => {
+  const cadence = RULES.bossCadence || 5;
+  return Array.from({ length: cadence }, (_, i) => 6 + i * 14);
+};
+function buildRouteActive() {
+  const [c, x] = makeCanvas(13, 13);
+  ring(x, 6, 6, 5, 1.5);
+  fill(x, '#c8303a', 5, 5, 2, 2); fill(x, '#ff8a72', 5, 5, 1, 1);
   return c;
 }
-function drawRoute(c, u, ox, oy, t) {
+function buildRoute() {
+  const nodes = routeNodes(), last = nodes.length - 1;
+  const w = Math.max(ROUTE.w, nodes[last] + 58);
+  const [c, x] = makeCanvas(w, ROUTE.h);
+  for (let i = 0; i < last; i++) for (let px = nodes[i] + 4; px < nodes[i + 1] - 3; px += 2) { fill(x, O, px, 6, 1, 3); fill(x, '#e9d3a6', px, 7, 1, 1); }
+  for (const n of nodes.slice(0, last)) { fill(x, O, n - 2, 5, 5, 5); fill(x, '#a99a86', n - 1, 6, 3, 3); fill(x, '#e9dcc4', n - 1, 6, 1, 1); }
+  const bx = nodes[last] - 7;
+  fill(x, O, bx, 0, 14, 14); fill(x, '#3a1a2a', bx + 1, 1, 12, 12); fill(x, '#5a2a40', bx + 1, 1, 12, 1);
+  x.drawImage(Hd.icons.skull, bx + 1, 2);
+  return c;
+}
+function drawRoute(c, u, ox, oy, t, st) {
+  const nodes = routeNodes(), cadence = nodes.length;
+  const stage = st ? (st.stage || 1) : 1;
+  const pos = (stage - 1) % cadence, bossIn = cadence - 1 - pos;
   const X = ROUTE.x + ox, Y = ROUTE.y + oy;
   dropShadow(c, Hd.route, X, Y);
   c.drawImage(Hd.route, X, Y);
-  if ((t % 2.4) < 0.25) { fill(c, '#fff1b8', X + 3, Y + 3, 2, 1); fill(c, '#fff1b8', X + 2, Y + 4, 1, 2); }
-  if (u) { putText(u, Hd.text.boss, X + 73, Y + 4); num(c, '4', X + 75 + Math.ceil(Hd.text.boss.inkW / S) + 3, Y + 4, ['#fbe9c4', '#ffffff']); }
+  for (let i = 0; i < pos && i < cadence - 1; i++) {
+    const nx = nodes[i];
+    fill(c, O, X + nx - 2, Y + 5, 5, 5); fill(c, '#d89b38', X + nx - 1, Y + 6, 3, 3); fill(c, '#fff1b8', X + nx - 1, Y + 6, 1, 1);
+  }
+  if (pos < cadence - 1) {
+    const ax = nodes[pos];
+    c.drawImage(Hd.routeActive, X + ax - 6, Y + 1);
+    if ((t % 2.4) < 0.25) { fill(c, '#fff1b8', X + ax - 3, Y + 3, 2, 1); fill(c, '#fff1b8', X + ax - 4, Y + 4, 1, 2); }
+  } else {
+    const bx = X + nodes[cadence - 1] - 7;
+    fill(c, '#c8303a', bx, Y, 14, 1); fill(c, '#c8303a', bx, Y + 13, 14, 1);
+    fill(c, '#c8303a', bx, Y, 1, 14); fill(c, '#c8303a', bx + 13, Y, 1, 14);
+  }
+  const tx = X + nodes[cadence - 1] + 11;
+  if (u) {
+    if (bossIn > 0) {
+      putText(u, Hd.text.boss, tx, Y + 4);
+      num(c, String(bossIn), tx + 2 + Math.ceil(Hd.text.boss.inkW / S) + 3, Y + 4, ['#fbe9c4', '#ffffff']);
+    } else {
+      num(c, 'BOSS!', tx + 1, Y + 4, ['#ff8a72', '#ffe9a0']);
+    }
+  }
 }
 
 // ---------- PURSE + toggles (top-right) ----------
@@ -652,30 +682,27 @@ function drawNext(c, u, ox, oy, t) {
 }
 
 // ---------- ACTION BELT (bottom-right) ----------
-const BELT = { x: 458, y: 314, w: 180, h: 46 };
-const SOCKETS = [16, 42, 68], TILES = [94, 122, 150], SY = 30;
+const BELT = { x: 484, y: 314, w: 154, h: 46 };
+const SOCKETS = [16, 42], TILES = [68, 96, 124], SY = 30;
 function buildBelt() {
   const [c, x] = makeCanvas(BELT.w, BELT.h);
-  panel(x, 0, 13, 180, 33, { k: 4, mat: 'leather', seed: 9 });
-  stitches(x, 0, 13, 180, 33, 2);
+  panel(x, 0, 13, 154, 33, { k: 4, mat: 'leather', seed: 9 });
+  stitches(x, 0, 13, 154, 33, 2);
   fill(x, O, 0, 18, 6, 22); fill(x, BRASS[3], 1, 19, 4, 20); fill(x, BRASS[6], 1, 19, 4, 1); fill(x, BRASS[1], 1, 38, 4, 1);
   for (const sx of SOCKETS) {
     ring(x, sx, SY, 12, 2);
     for (let j = -10; j <= 10; j++) for (let i = -10; i <= 10; i++) { const d = Math.hypot(i, j); if (d < 9.6) fill(x, d > 8.4 ? IRON[0] : (j < -2 ? IRON[3] : IRON[2]), sx + i, SY + j); }
   }
-  // [1] Second Wind — ready
+  // [1] Second Wind — ready;  [2] Potion — none yet
   x.drawImage(Hd.icons.wind, SOCKETS[0] - 8, SY - 8);
-  // [2] Action Surge — locked until Lv 2;  [3] Potion — none yet
-  x.drawImage(Hd.icons.surgeG, SOCKETS[1] - 8, SY - 8);
-  x.drawImage(Hd.icons.potion, SOCKETS[2] - 7, SY - 8);
-  for (const sx of SOCKETS.slice(1)) for (let j = -9; j <= 9; j++) for (let i = -9; i <= 9; i++) if (Math.hypot(i, j) < 9.4) { x.fillStyle = 'rgba(14,10,18,0.3)'; x.fillRect(sx + i, SY + j, 1, 1); }
-  x.drawImage(Hd.icons.lock, SOCKETS[1] + 3, SY + 1);
+  x.drawImage(Hd.icons.potion, SOCKETS[1] - 7, SY - 8);
+  for (let j = -9; j <= 9; j++) for (let i = -9; i <= 9; i++) if (Math.hypot(i, j) < 9.4) { x.fillStyle = 'rgba(14,10,18,0.3)'; x.fillRect(SOCKETS[1] + i, SY + j, 1, 1); }
   // potion count badge
-  fill(x, O, SOCKETS[2] + 4, SY + 3, 9, 11); fill(x, IRON[2], SOCKETS[2] + 5, SY + 4, 7, 9); fill(x, IRON[4], SOCKETS[2] + 5, SY + 4, 7, 1);
-  num(x, '0', SOCKETS[2] + 8.5, SY + 5, ['#b2afbd', '#d8d4e0'], 'c', { outline: null });
-  ['1', '2', '3'].forEach((k, i) => keycap(x, SOCKETS[i] - 13, 36, k));
-  fill(x, O, 82, 15, 5, 29); fill(x, BRASS[3], 83, 16, 3, 27); fill(x, BRASS[5], 83, 16, 1, 27);
-  rivet(x, 83, 19); rivet(x, 83, 38);
+  fill(x, O, SOCKETS[1] + 4, SY + 3, 9, 11); fill(x, IRON[2], SOCKETS[1] + 5, SY + 4, 7, 9); fill(x, IRON[4], SOCKETS[1] + 5, SY + 4, 7, 1);
+  num(x, '0', SOCKETS[1] + 8.5, SY + 5, ['#b2afbd', '#d8d4e0'], 'c', { outline: null });
+  ['1', '2'].forEach((k, i) => keycap(x, SOCKETS[i] - 13, 36, k));
+  fill(x, O, 56, 15, 5, 29); fill(x, BRASS[3], 57, 16, 3, 27); fill(x, BRASS[5], 57, 16, 1, 27);
+  rivet(x, 57, 19); rivet(x, 57, 38);
   TILES.forEach((tx0, i) => {
     panel(x, tx0, 15, 26, 29, { k: 2, mat: 'wood', seed: 30 + i });
     fill(x, 'rgba(20,10,8,0.5)', tx0 + 2, 34, 22, 8);
@@ -720,12 +747,17 @@ function drawBelt(c, u, ox, oy, t) {
     twinkle(c, gx + 2, gy + 2, t, 2.1, 0.5);
     twinkle(c, gx + 24, gy + 26, t, 1.7, 1.0);
   }
-  // Second Wind is ready: its bezel breathes green-gold
-  const a = 0.35 + 0.35 * (0.5 + 0.5 * Math.sin(t * 3.2));
-  c.save(); c.globalAlpha = a; c.globalCompositeOperation = 'lighter';
-  for (let j = -12; j <= 12; j++) for (let i = -12; i <= 12; i++) { const d = Math.hypot(i, j); if (d > 9.6 && d < 11.6) fill(c, d > 10.6 ? '#3a6a20' : '#5aa040', X + SOCKETS[0] + i, Y + SY + j); }
-  c.restore();
-  twinkle(c, X + SOCKETS[0] - 7, Y + SY - 7, t, 2.7, 0.3);
+  if (windLocked) {
+    for (let j = -9; j <= 9; j++) for (let i = -9; i <= 9; i++) if (Math.hypot(i, j) < 9.6) fill(c, 'rgba(30,28,38,0.66)', X + SOCKETS[0] + i, Y + SY + j);
+    c.drawImage(Hd.icons.lock, X + SOCKETS[0] - 4, Y + SY - 5);
+  } else {
+    // Second Wind is ready: its bezel breathes green-gold
+    const a = 0.35 + 0.35 * (0.5 + 0.5 * Math.sin(t * 3.2));
+    c.save(); c.globalAlpha = a; c.globalCompositeOperation = 'lighter';
+    for (let j = -12; j <= 12; j++) for (let i = -12; i <= 12; i++) { const d = Math.hypot(i, j); if (d > 9.6 && d < 11.6) fill(c, d > 10.6 ? '#3a6a20' : '#5aa040', X + SOCKETS[0] + i, Y + SY + j); }
+    c.restore();
+    twinkle(c, X + SOCKETS[0] - 7, Y + SY - 7, t, 2.7, 0.3);
+  }
   ['train', 'gear', 'hero'].forEach((k, i) => putText(u, Hd.text[k], X + TILES[i] + 13, Y + 35.5, 'c'));
   // the locked tiles: greyed out, chained, a little padlock where the keycap sits
   TILES.forEach((tx0, i) => {
@@ -739,16 +771,20 @@ function drawBelt(c, u, ox, oy, t) {
     }
     c.drawImage(Hd.icons.lock, gx + 9, gy + 8);
   });
-  // Beat 9: at level 2 the surge socket shrugs off its padlock and the chevrons light
-  if (!surgeLocked) {
-    const sx = X + SOCKETS[1], sy = Y + SY;
-    for (let j = -10; j <= 10; j++) for (let i = -10; i <= 10; i++) { const d = Math.hypot(i, j); if (d < 9.6) fill(c, d > 8.4 ? IRON[0] : (j < -2 ? IRON[3] : IRON[2]), sx + i, sy + j); }
-    c.drawImage(Hd.icons.surge, sx - 8, sy - 8);
-    const a2 = 0.30 + 0.30 * (0.5 + 0.5 * Math.sin(t * 3.6));
-    c.save(); c.globalAlpha = a2; c.globalCompositeOperation = 'lighter';
-    for (let j = -12; j <= 12; j++) for (let i = -12; i <= 12; i++) { const d = Math.hypot(i, j); if (d > 9.6 && d < 11.6) fill(c, d > 10.6 ? '#7a3a10' : '#e8642a', sx + i, sy + j); }
+  // loot arrival flash + unread loot count pip on the Gear tile
+  const gf = performance.now() / 1000 - gearFlashAt;
+  if (gf >= 0 && gf < 0.45) {
+    const gx = X + TILES[1], gy = Y + 15, q = 1 - gf / 0.45;
+    c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = 0.7 * q;
+    fill(c, '#ffe7a0', gx + 1, gy + 1, 24, 27);
     c.restore();
-    twinkle(c, sx + 7, sy - 7, t, 2.9, 0.8);
+  }
+  if (gearBadge > 0) {
+    const bx = X + TILES[1] + 19, by = Y + 12;
+    fill(c, O, bx, by, 9, 9);
+    fill(c, '#b82824', bx + 1, by + 1, 7, 7);
+    fill(c, '#ef5a4e', bx + 1, by + 1, 7, 1);
+    num(c, gearBadge > 9 ? '9+' : String(gearBadge), bx + 4.5, by + 1.5, ['#fff8dc', '#ffffff'], 'c', { outline: null, shadow: false });
   }
 }
 
@@ -826,13 +862,13 @@ export function drawGameHUD(c, u, t) {
     if (t < at) return false;
     const k = arrive(t, at, 0.3), yy = Math.round((1 - k) * -6);
     c.globalAlpha = clamp(k * 1.5); dropShadow(c, img, X, Y + yy); c.drawImage(img, X, Y + yy); c.globalAlpha = 1;
-    if (k > 0.6) putText(u, text, X + 18, Y + yy + 3.5);
+    if (k > 0.6) putText(u, text, X + 18, Y + yy + 7, 'l', 'm');
     return true;
   };
   if ((st.level || 1) < 2) tag(Hd.soon, PLATE.x + 44, PLATE.y + 38, HUD_TIMES.soon, Hd.text.soon);
   if (t >= HUD_TIMES.route) {
     const k = clamp(inv(HUD_TIMES.route, HUD_TIMES.route + 0.3, t));
-    c.globalAlpha = k; drawRoute(c, k > 0.5 ? u : null, 0, Math.round((1 - easeOut(k)) * -5), t); c.globalAlpha = 1;
+    c.globalAlpha = k; drawRoute(c, k > 0.5 ? u : null, 0, Math.round((1 - easeOut(k)) * -5), t, st); c.globalAlpha = 1;
   }
   const bob = t > HUD_TIMES.now + 0.4 ? Math.round(Math.sin(t * 2.6) * 0.75) : 0;
   const hopN = trainPulse && (t % 1.2) < 0.3 ? -Math.round(Math.sin((t % 1.2) / 0.3 * Math.PI) * 3) : 0;

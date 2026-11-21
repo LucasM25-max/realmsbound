@@ -70,7 +70,7 @@ function heroTurn(s) {
       return;
     }
     const roll = 1 + Math.floor(D.rng() * 20);
-    const dice = Array.from({ length: roll === 20 ? 4 : 2 }, () => 1 + Math.floor(D.rng() * 6));
+    const dice = Array.from({ length: roll >= (cb.E.critRange || 20) ? 4 : 2 }, () => 1 + Math.floor(D.rng() * 6));
     rd.sw = cb.addSwing({ at: rd.at, rat: -1, roll, dice, live: true });
   }
   const sw = rd.sw; if (!sw) return;
@@ -88,7 +88,7 @@ function heroTurn(s) {
     }
     const left = alive(s).filter(r => isFinite(r.meleeAt));
     D.round = null;
-    if (left.length) startRound(sw.at, sw.at + cb.RULES.round);
+    if (left.length) startRound(sw.at, sw.at + cb.RULES.round * (cb.E.roundMult || 1));
   }
 }
 

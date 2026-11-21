@@ -17,7 +17,7 @@
 //  the hero's AC 16, doing 1d4. A Command Strike adds 10% of a weapon
 //  hit. Mystra's ward stops the hero dropping below 1 HP in Stage 1.
 // ─────────────────────────────────────────────────────────────
-import { T } from './timeline.js';
+import { T, W } from './timeline.js';
 import { F, off, PATH_Y, BURROW } from './world.js';
 import { buildRat, RAT_FEET, RAT_CX } from './art/rat.js';
 import { buildGoblin, GOB_FEET, GOB_CX } from './art/goblin.js';
@@ -30,8 +30,8 @@ import { num, numWidth } from './pixfont.js';
 // ---------- rules ----------
 export const RULES = {
   heroHP: 12, heroAC: 16, toHit: 5 /* PB 2 + STR 3 */, dmgBonus: 3, round: 6,
-  ratHP: 7, ratAC: 12, ratToHit: 4, ratXP: 25, lvl2XP: 300, ratRound: 4.25, csPct: 0.10,
-  gobRound: 4.75,                                               // goblins swing a touch slower than rats
+  ratHP: 7, ratAC: 12, ratToHit: 4, ratXP: 8, gobXP: 12, snikXP: 26, lvl2XP: 300, ratRound: 4.25, csPct: 0.10,
+  gobRound: 4.75, bossCadence: 5,                              // goblins swing a touch slower than rats
 };
 export const HS = 0.07, CU = 0.16;    // hit-stop hold (about 2 frames at 30 fps), then a short catch-up
 export const LEAP = 0.42;             // a rat's leap out of the burrow
@@ -56,8 +56,10 @@ export const ratGroundY = (x, og, depth = 0) => PATH_Y(Math.round(x)) + 3 + og +
 export let E = null;
 function fresh() {
   return { rats: [], swings: [], bites: [], strikes: [], heals: [], focus: [], hits: [], rounds: [], coins: [], orbs: [],
-    kills: 0, cues: [], live: [], liveOn: false, streak: 0, lastArrive: -9, spent: 0, dmgMult: 1, training: {},
-    inv: [], gear: { helm: null, armor: null, cloak: null, weapon: null, shield: null, boots: null, ring1: null, ring2: null, amulet: null, trinket: null }, hpBonus: 0, level: 1 };
+    kills: 0, cues: [], live: [], liveOn: false, streak: 0, lastArrive: -9, spent: 0, dmgMult: 1, hpMult: 1, dmgReduce: 0,
+    roundMult: 1, extraStrikes: 0, strikeMult: 1, critBonus: 0, critRange: 20, goldFind: 1, autoCollect: false,
+    regenMult: 1, potionMult: 1, potionCapBonus: 0, training: {},
+    inv: [], gear: { helm: null, armor: null, cloak: null, weapon: null, shield: null, boots: null, ring1: null, ring2: null, amulet: null, trinket: null }, hpBonus: 0, level: 1, stage: 1 };
 }
 // sound cues: Beat 1's are fixed (handed to the audio engine up front); Beat 2's are streamed as they're decided
 function cue(s, k, o = {}) { const c = { s, k, ...o }; (E.liveOn ? E.live : E.cues).push(c); return c; }
@@ -145,10 +147,11 @@ function killRat(r, at, src) {
   // loot: copper arcs out. Beat 1's coins fly to the purse on their own; a rat flagged
   // holdCoins drops coins that rest on the ground for the player to tap (Beat 3).
   const cspawn = launch ? at + HS + 0.06 : r.popAt;          // a launched goblin's purse spills as he lifts off
+  const coinVal = Math.max(1, Math.round((r.coinV || 1) * (E.goldFind || 1)));
   for (let j = 0; j < r.coins; j++) {
     const spread = (j - (r.coins - 1) / 2) * 10 + (hash(j, r.id * 7 + 3) - 0.5) * 4;
     const arc = 0.36 + j * 0.05;
-    const c = { rat: r.id, j, ox: r.deathX + 8, depth: r.depth, spread, h: 20 + hash(j, r.id + 11) * 10, spawn: cspawn, land: cspawn + arc, gob: !!r.gob, v: r.coinV || 1 };
+    const c = { rat: r.id, j, ox: r.deathX + 8, depth: r.depth, spread, h: 20 + hash(j, r.id + 11) * 10, spawn: cspawn, land: cspawn + arc, gob: !!r.gob, v: coinVal };
     if (r.holdCoins) { c.hold = true; c.expire = Infinity; }                // beat3 arms the 5 s countdown once the fight is over
     else {
       c.fly = r.popAt + 0.72 + j * 0.13; c.arrive = c.fly + 0.58;
@@ -159,9 +162,12 @@ function killRat(r, at, src) {
     cue(c.land, 'tink', { i: j });
   }
   // the XP mote — for a launched goblin it spills out of the ding-star itself
+  const xp = r.snik ? RULES.snikXP : r.gob ? RULES.gobXP : RULES.ratXP;
+  r.xp = xp;
+  const prevXP = E.orbs.reduce((acc, q) => acc + q.xp, 0);
   const o = launch
-    ? { rat: r.id, from: r.popAt + 0.04, arrive: r.popAt + 0.66, idx: r.killIdx, x: r.deathX + 300, y: 70, depth: r.depth, v: r.snik ? 3 : 1 }
-    : { rat: r.id, from: r.popAt + 0.12, arrive: r.popAt + 0.72, idx: r.killIdx, x: r.deathX + 6, depth: r.depth, v: r.snik ? 3 : 1 };
+    ? { rat: r.id, from: r.popAt + 0.04, arrive: r.popAt + 0.66, idx: r.killIdx, x: r.deathX + 300, y: 70, depth: r.depth, xp, cumXP: prevXP + xp }
+    : { rat: r.id, from: r.popAt + 0.12, arrive: r.popAt + 0.72, idx: r.killIdx, x: r.deathX + 6, depth: r.depth, xp, cumXP: prevXP + xp };
   E.orbs.push(o);
   if (r.gob) {
     // the helm outlives him: it spins off, clatters, and lies in the grass a while
@@ -183,9 +189,10 @@ function killRat(r, at, src) {
 // ---------- the hero's swings ----------
 export function addSwing(w) {
   w.total = w.roll + RULES.toHit;
-  w.crit = w.roll === 20; w.fumble = w.roll === 1;
+  w.crit = w.roll >= (E.critRange || 20); w.fumble = w.roll === 1;
   w.hit = !w.fumble && (w.crit || w.total >= RULES.ratAC);
-  w.dmg = w.hit ? Math.max(1, Math.round((w.dice.reduce((a, b) => a + b, 0) + RULES.dmgBonus) * E.dmgMult)) : 0;
+  const critMult = w.crit ? (1 + (E.critBonus || 0)) : 1;
+  w.dmg = w.hit ? Math.max(1, Math.round((w.dice.reduce((a, b) => a + b, 0) + RULES.dmgBonus) * E.dmgMult * critMult)) : 0;
   w.linger = w.linger ?? (w.hit ? 0.95 : 1.05);
   E.swings.push(w);
   if (w.hit) { E.hits.push(w.at); E.hits.sort((a, b) => a - b); }
@@ -217,16 +224,18 @@ function retarget(r, at) {
 }
 
 // ---------- rat bites ----------
+export function heroMaxHP() { return Math.max(1, Math.round(RULES.heroHP * (E.hpMult || 1)) + (E.hpBonus || 0)); }
 export function heroHP(s) {
-  let hp = RULES.heroHP + (E.hpBonus || 0);
+  const maxHP = heroMaxHP();
+  let hp = maxHP;
   for (const b of E.bites) if (!b.void && b.hit && b.at <= s) hp -= b.dmg;
-  for (const h of E.heals) if (h.at <= s) hp += h.amt;
+  for (const h of E.heals) if (h.at <= s) hp = Math.min(maxHP, hp + h.amt);
   return hp;
 }
-export function heroMaxHP() { return RULES.heroHP + (E.hpBonus || 0); }
 export function addBite(b) {
   b.hit = b.roll !== 1 && (b.roll === 20 || b.roll + RULES.ratToHit >= RULES.heroAC);
   if (b.hit) {
+    if (E.dmgReduce) b.dmg = Math.max(1, b.dmg - E.dmgReduce);
     const hp = heroHP(b.at);
     if (hp - b.dmg < 1) { b.dmg = Math.max(0, hp - 1); b.ward = true; }   // Mystra's patience
   }
@@ -243,7 +252,7 @@ export function addStrike(cs) {
   damageRat(E.rats[cs.rat], cs.at, cs.dmg, { kind: 'cs', cs });
   return cs;
 }
-export function addHeal(at, amt) { E.heals.push({ at, amt }); cue(at, 'heal'); }
+export function addHeal(at, amt, kind = 'active') { E.heals.push({ at, amt, passive: kind === 'regen' }); cue(at, 'heal'); }
 export function setFocus(at, rat) {
   const cur = E.focus.length ? E.focus[E.focus.length - 1].rat : -1;
   E.focus.push({ at, rat });
@@ -293,19 +302,20 @@ resetCombat();
 // ---------- HUD numbers ----------
 export function hudState(t) {
   const s = warp(t);
-  let hp = RULES.heroHP + (E.hpBonus || 0), hpAt = -9, healAt = -9, hpLost = 0;
+  const hpMax = heroMaxHP();
+  let hp = hpMax, hpAt = -9, healAt = -9, hpLost = 0;
   for (const b of E.bites) if (!b.void && b.hit && b.dmg > 0 && b.at <= s) { hp -= b.dmg; if (b.at >= hpAt) { hpAt = b.at; hpLost = b.dmg; } }
-  for (const h of E.heals) if (h.at <= s) { hp += h.amt; healAt = Math.max(healAt, h.at); }
+  for (const h of E.heals) if (h.at <= s) { hp = Math.min(hpMax, hp + h.amt); healAt = Math.max(healAt, h.at); }
   let cp = 0, cpAt = -9; for (const c of E.coins) if (c.arrive !== undefined && s >= c.arrive) { cp += (c.v || 1); cpAt = Math.max(cpAt, c.arrive); }
   cp = Math.max(0, cp - E.spent);                          // purchases (Beat 6) spend out of the purse
-  let xp = 0, xpAt = -9; for (const o of E.orbs) if (s >= o.arrive) { xp += RULES.ratXP * (o.v || 1); xpAt = Math.max(xpAt, o.arrive); }
+  let xp = 0, xpAt = -9; for (const o of E.orbs) if (s >= o.arrive) { xp += o.xp; xpAt = Math.max(xpAt, o.arrive); }
   let quota = 0, quotaAt = -9; for (const r of E.rats) if (r.popAt !== undefined && s >= r.popAt + 0.25) { quota++; quotaAt = Math.max(quotaAt, r.popAt + 0.25); }
   // the hero's round: pips fill toward each swing (and stay full while he waits for something to hit)
   let round = 0, swingAt = -9, combat = false;
   for (const rd of E.rounds) if (s >= rd.t0 && s < rd.at) { round = s < rd.full ? inv(rd.t0, rd.full, s) : 1; combat = true; }
   for (const w of E.swings) if (w.at <= s && !w.void) swingAt = Math.max(swingAt, w.at);
   if (s - swingAt < 0.3) combat = true;
-  return { hp, hpMax: RULES.heroHP + (E.hpBonus || 0), hpAt, hpLost, healAt, cp, cpAt, xp, xpAt, quota, quotaAt, round, swingAt, combat, s, level: E.level || 1 };
+  return { hp, hpMax, hpAt, hpLost, healAt, cp, cpAt, xp, xpAt, quota, quotaAt, round, swingAt, combat, s, level: E.level || 1, stage: E.stage || 1 };
 }
 
 // ---------- the hero ----------
@@ -816,7 +826,7 @@ export function collectCoin(c, s) {
   cue(c.fly, 'zip', { pan: 0.1 }); cue(c.arrive, 'clink', { i: c.pitch });
 }
 // a tap's gauntlet also sweeps up resting coins near the one that was struck — returns the count pocketed
-export function collectCoinSplash(c, s, og, radius = 26) {
+export function collectCoinSplash(c, s, og, radius = 34) {
   const [x0, y0] = coinPos(c, s, og);
   collectCoin(c, s);
   let n = 1;
@@ -824,6 +834,16 @@ export function collectCoinSplash(c, s, og, radius = 26) {
     if (o === c || !o.hold || o.fly !== undefined || o.roll !== undefined || s < o.land + 0.16) continue;
     const [x, y] = coinPos(o, s, og);
     if (Math.hypot(x - x0, (y - y0) * 1.4) <= radius) { collectCoin(o, s + 0.04 + n * 0.05); n++; }
+  }
+  return n;
+}
+// sweeps any resting coins near a ground point (used when clicking nearby loot) — returns count pocketed
+export function collectCoinsNear(gx, gy, s, og, radius = 44) {
+  let n = 0;
+  for (const o of E.coins) {
+    if (!o.hold || o.fly !== undefined || o.roll !== undefined || s < o.land + 0.16) continue;
+    const [x, y] = coinPos(o, s, og);
+    if (Math.hypot(x - gx, (y - gy) * 1.4) <= radius) { collectCoin(o, s + n * 0.045); n++; }
   }
   return n;
 }
@@ -837,54 +857,59 @@ export function buyCp(n, s) {
   for (let i = 0; i < n; i++) cue(s + 0.03 + i * 0.06, 'clink', { i: Math.min(2 + i, 11) });
 }
 
-// ---------- the six drills (design plan §5.6) ----------
-// Every track buys with copper and feeds one part of the fight math. The price
-// climbs ~10% a rank (the plan's 8–12% band); Weapon Drills opens at 10 cp
-// because the purse holds 13 when the yard first opens. The ×2-style milestone
-// ranks below are the plan's; each one also earns a word from Elminster.
+// ---------- the six drills (Freeplay plan §1.1 & design plan §5.6) ----------
+const growCost = (base, rate) => p => { let c = base; for (let i = 0; i < p; i++) c = Math.ceil(c * rate); return c; };
+const M_RANKS = [10, 25, 50, 100, 150, 200, 300, 400, 500];
+const T_M_RANKS = [10, 25, 50, 100, 150, 200, 300, 400];
+const mileCount = (p, ranks = M_RANKS) => { let n = 0; for (const r of ranks) if (p >= r) n++; return n; };
+const fmtMult = m => m >= 10 ? `×${Math.round(m)}` : `+${Math.round((m - 1) * 100)}%`;
+
 export const TRACKS = [
   { id: 'weapon', name: 'Weapon Drills', kind: 'Martial drill · ranks without number',
     d1: 'Sword work at the pell: edge and form.', d2: 'Each rank: a tenth harder.',
-    fxName: 'Damage', fx: p => `+${p * 10}%`, float: '+DAMAGE',
-    cost: p => Math.round(10 * Math.pow(1.1, p)),
-    miles: [[10, '×2!', 'thy blows land twofold'], [25, '×2!', 'thy blows double again'], [50, '×2!', 'again twofold'],
-            [100, '×2!', 'twofold yet again'], [200, '×2!', 'the pell trembles'], [300, '×2!', 'without number']],
-    apply: (E2, p) => { E2.dmgMult = 1 + p * 0.1; } },
+    fxName: 'Damage', fx: p => fmtMult((1 + p * 0.1) * Math.pow(2, mileCount(p))), float: '+DAMAGE',
+    cost: growCost(10, 1.13),
+    miles: M_RANKS.map((r, i) => [r, '×2!', ['thy blows land twofold', 'thy blows double again', 'again twofold', 'twofold yet again', 'stronger still', 'the pell trembles', 'steel sings', 'unbroken', 'without number'][i]]),
+    apply: (E2, p) => { E2.dmgMult = (1 + p * 0.1) * Math.pow(2, mileCount(p)); } },
   { id: 'armour', name: 'Armour Drills', kind: 'Martial drill · hide like a wall',
-    d1: 'Brace, shrug, endure. Hide like a wall.', d2: 'Each rank: a twentieth stouter.',
-    fxName: 'Health', fx: p => `+${p * 5}%`, float: '+ARMOUR',
-    cost: p => Math.round(12 * Math.pow(1.1, p)),
-    miles: [[10, '×2!', 'twice the hide'], [25, '×2!', 'twice it again'], [50, '×2!', 'a wall of thee'],
-            [100, '×2!', 'stone would envy thee'], [200, '×2!', 'without number'], [300, '×2!', 'without number']],
-    apply: (E2, p) => { E2.hpMult = 1 + p * 0.05; } },
+    d1: 'Brace, shrug, endure. Hide like a wall.', d2: 'Each rank: +5% HP & tough hide.',
+    fxName: 'Health', fx: p => fmtMult((1 + p * 0.05) * Math.pow(2, mileCount(p))), float: '+ARMOUR',
+    cost: growCost(15, 1.13),
+    miles: M_RANKS.map((r, i) => [r, '×2!', ['twice the hide', 'twice it again', 'a wall of thee', 'stone would envy thee', 'iron-bound', 'unyielding', 'bastion of bone', 'immovable', 'without number'][i]]),
+    apply: (E2, p) => { E2.hpMult = (1 + p * 0.05) * Math.pow(2, mileCount(p)); E2.dmgReduce = Math.floor(p / 5); } },
   { id: 'footwork', name: 'Footwork', kind: 'Martial drill · swift as borrowed time',
-    d1: 'Ladder steps and pivots in the mud.', d2: 'Each rank: a shade swifter.',
-    fxName: 'Round time', fx: p => `−${p}%`, float: '+SPEED',
-    cost: p => Math.round(15 * Math.pow(1.1, p)),
-    miles: [[10, '−10%!', 'the round runs a tenth shorter'], [25, '−10%!', 'shorter still'], [50, '−10%!', 'shorter again'],
-            [100, '−10%!', 'a tenth of the wait'], [200, '−10%!', 'the round hurries'], [300, '−10%!', 'without number']],
-    apply: (E2, p) => { E2.roundMult = Math.max(0.5, 1 - p * 0.01); } },
+    d1: 'Ladder steps and pivots in the mud.', d2: 'Each rank: swifter swing rounds.',
+    fxName: 'Round time', fx: p => `-${Math.round((1 - Math.max(0.25, Math.pow(0.99, p))) * 100)}%`, float: '+SPEED',
+    cost: growCost(25, 1.15),
+    miles: M_RANKS.map((r, i) => [r, 'STRIKE+1!', i === 0 ? 'an extra Command Strike per tap' : 'yet another Command Strike']),
+    apply: (E2, p) => { E2.roundMult = Math.max(0.25, Math.pow(0.99, p)); E2.extraStrikes = mileCount(p); } },
   { id: 'tactics', name: 'Tactics', kind: 'Martial drill · the eye before the arm',
-    d1: 'Chalk lines. Learn where the gaps live.', d2: 'Each rank: a tenth harder.',
-    fxName: 'Command strike', fx: p => `+${p * 10}%`, float: '+TACTICS',
-    cost: p => Math.round(15 * Math.pow(1.1, p)),
-    miles: [[10, '×2!', 'thy commands land twofold'], [25, '×2!', 'twofold again'], [50, '×2!', 'again'],
-            [250, 'CRIT+!', 'thy crits grow likelier'], [500, 'CRIT+!', 'likelier still']],
-    apply: (E2, p) => { E2.strikeMult = 1 + p * 0.1; } },
+    d1: 'Chalk lines. Learn where the gaps live.', d2: 'Each rank: +10% strike, +2% crit dmg.',
+    fxName: 'Command', fx: p => fmtMult((1 + p * 0.1) * Math.pow(2, mileCount(p, T_M_RANKS))), float: '+TACTICS',
+    cost: growCost(100, 1.13),
+    miles: [
+      [10, '×2!', 'thy commands land twofold'], [25, '×2!', 'twofold again'], [50, '×2!', 'again twofold'],
+      [100, '×2!', 'twofold yet again'], [150, '×2!', 'thy voice shakes the field'], [200, '×2!', 'without number'],
+      [250, 'CRIT+!', 'thy crits grow likelier'], [300, '×2!', 'twofold yet again'], [400, '×2!', 'twofold yet again'],
+      [500, 'CRIT+!', 'likelier still'],
+    ],
+    apply: (E2, p) => {
+      E2.strikeMult = (1 + p * 0.1) * Math.pow(2, mileCount(p, T_M_RANKS));
+      E2.critBonus = p * 0.02;
+      E2.critRange = 20 - (p >= 250 ? 1 : 0) - (p >= 500 ? 1 : 0);
+    } },
   { id: 'scavenging', name: 'Scavenging', kind: 'Field craft · copper finds its way',
     d1: 'Pockets, packs and loose floorboards.', d2: 'Each rank: a fiftieth more.',
-    fxName: 'Gold find', fx: p => `+${p * 2}%`, float: '+GOLD',
-    cost: p => Math.round(20 * Math.pow(1.09, p)),
-    miles: [[5, 'AUTO!', 'coins pick themselves up'], [10, '×2!', 'twice the gleanings'], [25, '×2!', 'twice again'],
-            [50, '×2!', 'again'], [100, '×2!', 'a fortune in leavings']],
-    apply: (E2, p) => { E2.goldFind = 1 + p * 0.02; if (p >= 5) E2.autoCollect = true; } },
+    fxName: 'Gold find', fx: p => fmtMult((1 + p * 0.02) * Math.pow(2, mileCount(p))), float: '+GOLD',
+    cost: growCost(20, 1.13),
+    miles: [[5, 'AUTO!', 'coins pick themselves up'], ...M_RANKS.map((r, i) => [r, '×2!', ['twice the gleanings', 'twice again', 'again twofold', 'a fortune in leavings', 'heavy pockets', 'every glint caught', 'kingly gleanings', 'bottomless purse', 'without number'][i]])],
+    apply: (E2, p) => { E2.goldFind = (1 + p * 0.02) * Math.pow(2, mileCount(p)); E2.autoCollect = p >= 5; } },
   { id: 'conditioning', name: 'Conditioning', kind: 'Field craft · breath and bone',
-    d1: 'Sprints up the tor with a sack of stones.', d2: 'Each rank: a shade quicker.',
-    fxName: 'Mending', fx: p => `+${p * 5}%`, float: '+VIGOUR',
-    cost: p => Math.round(15 * Math.pow(1.1, p)),
-    miles: [[10, '×2!', 'thy mending runs twofold'], [25, 'POTION+1!', 'thy potions stretch further'], [50, '×2!', 'twofold again'],
-            [100, 'POTION+1!', 'further still'], [200, '×2!', 'without number'], [300, 'POTION+1!', 'bottomless']],
-    apply: (E2, p) => { E2.regenMult = 1 + p * 0.05; } },
+    d1: 'Sprints up the tor with a sack of stones.', d2: 'Each rank: +5% regen & potions.',
+    fxName: 'Mending', fx: p => fmtMult((1 + p * 0.05) * Math.pow(2, mileCount(p))), float: '+VIGOUR',
+    cost: growCost(50, 1.13),
+    miles: M_RANKS.map((r, i) => [r, 'POTION+1!', i === 0 ? 'twice the mending and +1 potion' : 'stronger mending and +1 potion']),
+    apply: (E2, p) => { const mc = mileCount(p); E2.regenMult = (1 + p * 0.05) * Math.pow(2, mc); E2.potionMult = E2.regenMult; E2.potionCapBonus = mc; } },
 ];
 // what the next milestone promises (the card's small print), or the drill's base note
 export function nextMile(tr, p) { const m = tr.miles.find(([r]) => r > p); return m ? `At RANK ${m[0]}: ${m[2]}.` : 'The drill goes ever on.'; }
@@ -896,23 +921,56 @@ export function applyTraining(id, ranks) {
   for (const tr of TRACKS) tr.apply(E, keyed[tr.id]);
 }
 export function trainingStats() {
-  const g = k => (E.training[k] || 0);
-  return { dmgMult: E.dmgMult, hpMult: E.hpMult || 1, roundMult: E.roundMult || 1, strikeMult: E.strikeMult || 1,
-           goldFind: E.goldFind || 1, regenMult: E.regenMult || 1, autoCollect: !!E.autoCollect, ranks: { ...E.training } };
+  return { dmgMult: E.dmgMult, hpMult: E.hpMult || 1, dmgReduce: E.dmgReduce || 0, roundMult: E.roundMult || 1,
+           extraStrikes: E.extraStrikes || 0, strikeMult: E.strikeMult || 1, critBonus: E.critBonus || 0, critRange: E.critRange || 20,
+           goldFind: E.goldFind || 1, regenMult: E.regenMult || 1, potionMult: E.potionMult || 1, potionCapBonus: E.potionCapBonus || 0,
+           autoCollect: !!E.autoCollect, ranks: { ...E.training } };
 }
 
 // ---------- gear & inventory (Beat 7 loot, Beat 8 the Gear screen) ----------
 export const GEAR_SLOTS = ['helm', 'armor', 'cloak', 'weapon', 'shield', 'boots', 'ring1', 'ring2', 'amulet', 'trinket'];
-export function addItem(item) { if (!E.inv.some(i => i.id === item.id)) E.inv.push({ equipped: false, ...item }); }
+export const slotFamily = sl => (sl === 'ring1' || sl === 'ring2' ? 'ring' : sl);
+export function itemPower(it) {
+  if (!it) return 0;
+  return (it.dmg || 0) * 6 + (it.toHit || 0) * 5 + (it.ac || 0) * 4 + (it.hp || 0) * 3 + (it.crit || 0) * 4 + (it.power || 0);
+}
+export function equippedForItem(it) {
+  if (!it) return null;
+  if (it.slot === 'ring') {
+    const r1 = E.gear.ring1 ? E.inv.find(i => i.id === E.gear.ring1) : null;
+    const r2 = E.gear.ring2 ? E.inv.find(i => i.id === E.gear.ring2) : null;
+    if (!r1 || !r2) return null;
+    return itemPower(r1) <= itemPower(r2) ? r1 : r2;
+  }
+  const id = E.gear[it.slot];
+  return id ? E.inv.find(i => i.id === id) || null : null;
+}
+export function compareItem(it) {
+  if (!it) return { delta: 0, worn: null, empty: true };
+  if (it.equipped) return { delta: 0, worn: it, empty: false };
+  const cur = equippedForItem(it);
+  if (!cur) return { delta: itemPower(it), worn: null, empty: true };
+  return { delta: itemPower(it) - itemPower(cur), worn: cur, empty: false };
+}
+export function addItem(item) {
+  if (!E.inv.some(i => i.id === item.id)) E.inv.push({ equipped: false, seq: E.inv.length, ...item });
+}
 export function inventory() { return E.inv; }
 export function gearState() { return { ...E.gear, hpBonus: E.hpBonus || 0 }; }
 export function equipItem(id, s) {
   const it = E.inv.find(i => i.id === id);
   if (!it) return null;
-  // rings share two fingers: take the free one, else the first
-  const slot = it.slot === 'ring'
-    ? ((!E.gear.ring1 || E.gear.ring1 === id) ? 'ring1' : ((!E.gear.ring2 || E.gear.ring2 === id) ? 'ring2' : 'ring1'))
-    : it.slot;
+  // rings share two fingers: take the free one, else the weaker / first
+  let slot = it.slot;
+  if (it.slot === 'ring') {
+    if (!E.gear.ring1 || E.gear.ring1 === id) slot = 'ring1';
+    else if (!E.gear.ring2 || E.gear.ring2 === id) slot = 'ring2';
+    else {
+      const r1 = E.inv.find(i => i.id === E.gear.ring1);
+      const r2 = E.inv.find(i => i.id === E.gear.ring2);
+      slot = itemPower(r1) <= itemPower(r2) ? 'ring1' : 'ring2';
+    }
+  }
   for (const sl of GEAR_SLOTS) if (E.gear[sl] === id) E.gear[sl] = null;   // it jumps fingers cleanly
   const prev = E.gear[slot];
   if (prev) { const p = E.inv.find(i => i.id === prev); if (p) p.equipped = false; }
@@ -931,6 +989,32 @@ export function unequipSlot(slot, s) {
   E.hpBonus = E.inv.filter(i => i.equipped && i.hp).reduce((a, i) => a + i.hp, 0);
   if (s !== undefined) cue(s, 'equip');
   return it;
+}
+export function equipBest(s) {
+  const changed = [];
+  for (const sl of GEAR_SLOTS) {
+    const fam = slotFamily(sl);
+    const curId = E.gear[sl];
+    const cur = curId ? E.inv.find(i => i.id === curId) : null;
+    const curPow = cur ? itemPower(cur) : -1;
+    const cands = E.inv.filter(i => i.slot === fam && (!i.equipped || i.id === curId))
+      .sort((a, b) => itemPower(b) - itemPower(a) || (b.seq || 0) - (a.seq || 0));
+    const best = cands[0];
+    if (!best) continue;
+    if (!cur || itemPower(best) > curPow) {
+      if (best.id !== curId) {
+        if (cur) cur.equipped = false;
+        best.equipped = true;
+        E.gear[sl] = best.id;
+        changed.push(best);
+      }
+    }
+  }
+  if (changed.length) {
+    E.hpBonus = E.inv.filter(i => i.equipped && i.hp).reduce((a, i) => a + i.hp, 0);
+    if (s !== undefined) cue(s, 'equip');
+  }
+  return changed;
 }
 
 // ---------- level (Beat 9: the first level-up) ----------
@@ -1035,7 +1119,7 @@ function drawXPOrbs(ctx, s, og) {
     if (s < o.from || s >= o.arrive) continue;
     const k = (s - o.from) / (o.arrive - o.from);
     const sx = o.x, sy = o.y !== undefined ? o.y : ratGroundY(sx, og, o.depth) - 16;
-    const tx = XP_BAR.x + XP_BAR.w * Math.min(1, (RULES.ratXP * (o.idx + (o.v || 1))) / RULES.lvl2XP), ty = XP_BAR.y + 1;
+    const tx = XP_BAR.x + XP_BAR.w * Math.min(1, o.cumXP / RULES.lvl2XP), ty = XP_BAR.y + 1;
     const cx = lerp(sx, tx, 0.5) - 30, cy = Math.min(sy, ty) - 40;
     const at = kk => { const ee = easeIn(kk) * 0.6 + kk * 0.4; return [(1 - ee) ** 2 * sx + 2 * (1 - ee) * ee * cx + ee * ee * tx, (1 - ee) ** 2 * sy + 2 * (1 - ee) * ee * cy + ee * ee * ty]; };
     ctx.globalCompositeOperation = 'lighter';
@@ -1276,12 +1360,9 @@ export function drawCombatOverlay(ctx, p, t, hero) {
   const s = warp(t), og = off(p, F.ground);
   if (hero) for (const w of E.swings) drawD20(ctx, s, w, hero.cx, hero.feet);
   for (const w of E.swings) {
-    if (w.void || w.rat < 0) continue;
+    if (w.void || w.rat < 0 || !w.hit) continue;
     const r = E.rats[w.rat], rx = r.dieAt === w.at ? r.deathX : baseX(r, w.at).x, ry = ratGroundY(rx, og, r.depth) - (r.gob ? 54 : 44);
-    if (w.hit) {
-      popText(ctx, s, w.at, String(w.dmg), rx + 12, ry, w.crit ? COL.gold : COL.white, w.crit ? 3 : 2, w.crit ? 1.3 : 1.0);
-      if (w.crit) popText(ctx, s, w.at + 0.05, 'CRIT!', rx + 12, ry - 22, COL.gold, 2, 1.2, 8);
-    } else popText(ctx, s, w.at, w.fumble ? 'FUMBLE' : 'MISS', rx + 12, ry + 4, COL.grey, 1, 0.9);
+    popText(ctx, s, w.at, String(w.dmg), rx + 12, ry, w.crit ? COL.gold : COL.white, w.crit ? 3 : 2, w.crit ? 1.3 : 1.0);
   }
   // Command Strike numbers: small and yellow, fanned out so a flurry of clicks stays readable
   for (const cs of E.strikes) {
@@ -1290,16 +1371,22 @@ export function drawCombatOverlay(ctx, p, t, hero) {
   }
   if (hero) {
     for (const b of E.bites) {
-      if (b.void) continue;
-      if (b.hit && b.dmg > 0) popText(ctx, s, b.at, String(b.dmg), hero.cx - 20, hero.feet - 52, COL.red, 2, 0.95);
-      else if (b.hit && b.ward) popText(ctx, s, b.at, 'WARD', hero.cx - 20, hero.feet - 52, COL.ward, 1, 1.0);
-      else if (!b.hit) popText(ctx, s, b.at + 0.02, 'MISS', hero.cx - 22, hero.feet - 44, COL.grey, 1, 0.8);
+      if (b.void || !b.hit) continue;
+      if (b.dmg > 0) popText(ctx, s, b.at, '-' + b.dmg, hero.cx - 20, hero.feet - 52, COL.red, 2, 0.95);
+      else if (b.ward) popText(ctx, s, b.at, 'WARD', hero.cx - 20, hero.feet - 52, COL.ward, 1, 1.0);
       if (b.ward) drawWard(ctx, s, b.at, hero);
     }
-    for (const h of E.heals) { popText(ctx, s, h.at, '+' + h.amt, hero.cx - 14, hero.feet - 58, COL.green, 1, 0.8, 10); healMotes(ctx, s, h.at, hero); }
+    for (const h of E.heals) {
+      if (!h.passive) popText(ctx, s, h.at, '+' + h.amt, hero.cx - 14, hero.feet - 58, COL.green, 1, 0.8, 10);
+      healMotes(ctx, s, h.at, hero);
+    }
     drawShouts(ctx, s, hero);
   }
-  for (const r of E.rats) if (r.popAt !== undefined) popText(ctx, s, r.popAt + 0.3, '+25 XP', r.deathX + 22, ratGroundY(r.deathX, og, r.depth) - (r.gob ? 30 : 22), COL.xp, 1, 1.1);
+  for (const r of E.rats) if (r.popAt !== undefined) {
+    const xpX = r.launched ? Math.min(W - 34, r.deathX + 290) : r.deathX + 24;
+    const xpY = r.launched ? 82 : ratGroundY(r.deathX, og, r.depth) - (r.gob ? 26 : 18);
+    popText(ctx, s, r.popAt + 0.55, '+' + (r.xp || RULES.ratXP) + ' XP', xpX, xpY, COL.xp, 1, 1.0);
+  }
   drawXPOrbs(ctx, s, og);
   drawCoinsFlying(ctx, s, og);
 }

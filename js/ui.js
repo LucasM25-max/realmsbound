@@ -4,9 +4,10 @@
 //  Frames/boxes are drawn on the native pixel grid; text is drawn
 //  on the 2x UI canvas with hard-thresholded pixel fonts.
 // ─────────────────────────────────────────────────────────────
-import { W, H, T, DIALOGUE, UI_SCALE as S, revealText, speakingAt, hudLine } from './timeline.js';
+import { W, H, T, DIALOGUE, UI_SCALE as S, revealText, speakingAt, hudLine, elminsterSkipped } from './timeline.js';
 import { buildPortrait, PORTRAIT_PIPE } from './art/elminster.js';
 import { makeCanvas, crispText, outlineCanvas, clamp, inv, lerp, easeOut, easeOutBack, easeInOut, hash, pxEllipse } from './util.js';
+import { C as packC, P, Raster, ramp } from './pix.js';
 import { ELM } from './actors.js';
 import { off, F } from './world.js';
 
@@ -53,11 +54,28 @@ export function buildUI() {
   C.sound = crispText('Sound on · best with headphones', FONT_BODY, '#9c8cb8');
   C.loading = crispText('Summoning the Realms…', FONT_BODY, '#9c8cb8');
   C.portrait = [0, 1, 2].map(o => buildPortrait(o).toCanvas());
-  C.name = crispText('ELMINSTER', 'bold 18px "Pixelify Sans"', '#ffe39a', { spacing: 2 });
-  C.nameSh = crispText('ELMINSTER', 'bold 18px "Pixelify Sans"', '#2a0d12', { spacing: 2 });
-  C.nameS = crispText('ELMINSTER', 'bold 15px "Pixelify Sans"', '#ffe39a', { spacing: 2 });
-  C.nameSSh = crispText('ELMINSTER', 'bold 15px "Pixelify Sans"', '#2a0d12', { spacing: 2 });
+  C.name = measureInk(crispText('ELMINSTER', 'bold 18px "Pixelify Sans"', '#ffe39a', { spacing: 2 }));
+  C.nameSh = measureInk(crispText('ELMINSTER', 'bold 18px "Pixelify Sans"', '#2a0d12', { spacing: 2 }));
+  C.nameS = measureInk(crispText('ELMINSTER', 'bold 15px "Pixelify Sans"', '#ffe39a', { spacing: 2 }));
+  C.nameSSh = measureInk(crispText('ELMINSTER', 'bold 15px "Pixelify Sans"', '#2a0d12', { spacing: 2 }));
+  C.skipIntro = measureInk(crispText('SKIP >>', 'bold 13px "Pixelify Sans"', '#ffe39a', { spacing: 1 }));
+  C.skipIntroSh = measureInk(crispText('SKIP >>', 'bold 13px "Pixelify Sans"', '#2a0d12', { spacing: 1 }));
+  C.skipHud = measureInk(crispText('SKIP', 'bold 12px "Pixelify Sans"', '#ffe39a', { spacing: 1 }));
+  C.skipHudSh = measureInk(crispText('SKIP', 'bold 12px "Pixelify Sans"', '#2a0d12', { spacing: 1 }));
   C.lineCache = new Map();
+}
+
+function measureInk(c) {
+  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+  let x0 = c.width, x1 = 0, y0 = c.height, y1 = 0;
+  for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) if (d[(y * c.width + x) * 4 + 3]) {
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  c.inkX = x0 < c.width ? x0 : 0;
+  c.inkW = x1 >= x0 ? x1 - x0 + 1 : c.width;
+  c.inkTop = y0 < c.height ? y0 : 0;
+  c.inkH = y1 >= y0 ? y1 - y0 + 1 : c.height;
+  return c;
 }
 
 function trim(c) {
@@ -100,33 +118,68 @@ function sparkle(ctx, x, y, s, a, col = '#fff6d8') {
   ctx.globalAlpha = 1;
 }
 
-// A little pixel d20 emblem (icosahedron, front view)
+// A crisp pixel-art d20 emblem (icosahedron, front view), baked once per radius
+const D20_SPRITES = new Map();
+function buildUiD20(r) {
+  if (D20_SPRITES.has(r)) return D20_SPRITES.get(r);
+  const pad = 2, sz = r * 2 + pad * 2 + 1, c = r + pad;
+  const ras = new Raster(sz, sz);
+  const body = P(['#2e0810', '#4e1520', '#6e1e2c', '#922a38', '#b63a48', '#d8566a']);
+  const gold = packC('#f2c25a'), goldD = packC('#a8692a'), out = packC('#140b0c'), hi = packC('#fff1b8'), ink = packC('#ffe9a8');
+  const hex = [...Array(6)].map((_, i) => {
+    const a = -Math.PI / 2 + i * Math.PI / 3;
+    return [c + Math.cos(a) * r, c + Math.sin(a) * r];
+  });
+  const tr = r * (r >= 13 ? 0.60 : 0.65);
+  const tri = [0, 1, 2].map(i => {
+    const a = -Math.PI / 2 + i * 2 * Math.PI / 3;
+    return [c + Math.cos(a) * tr, c + Math.sin(a) * tr];
+  });
+  const inTri = (x, y) => {
+    const sg = (p, q, s) => (p[0] - s[0]) * (q[1] - s[1]) - (q[0] - s[0]) * (p[1] - s[1]);
+    const P0 = [x, y];
+    const d1 = sg(P0, tri[0], tri[1]), d2 = sg(P0, tri[1], tri[2]), d3 = sg(P0, tri[2], tri[0]);
+    return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0));
+  };
+  ras.poly(hex, (x, y) => {
+    if (inTri(x + 0.5, y + 0.5)) return ramp(body, 0.84 - (y - c) * 0.012, x, y, 0.35);
+    const a = Math.atan2(y + 0.5 - c, x + 0.5 - c);
+    const sector = Math.floor(((a + Math.PI / 2) / (Math.PI / 3) + 6.5)) % 6;
+    return ramp(body, [0.64, 0.72, 0.44, 0.24, 0.18, 0.44][sector], x, y, 0.35);
+  });
+  const L = (p, q, col) => ras.line(p[0], p[1], q[0], q[1], col);
+  for (let i = 0; i < 6; i++) L(hex[i], hex[(i + 1) % 6], gold);
+  for (let i = 0; i < 3; i++) L(tri[i], tri[(i + 1) % 3], gold);
+  L(tri[0], hex[0], goldD); L(tri[0], hex[1], goldD); L(tri[0], hex[5], goldD);
+  L(tri[1], hex[1], goldD); L(tri[1], hex[2], goldD); L(tri[1], hex[3], goldD);
+  L(tri[2], hex[3], goldD); L(tri[2], hex[4], goldD); L(tri[2], hex[5], goldD);
+  ras.set(Math.round(hex[1][0]) - 1, Math.round(hex[1][1]), hi);
+  if (r >= 13) {
+    const nx = c - 3, ny = c - 2;
+    ['111', '001', '111', '100', '111'].forEach((row, j) => [...row].forEach((v, i) => { if (v === '1') ras.set(nx + i, ny + j, ink); }));
+    ['111', '101', '101', '101', '111'].forEach((row, j) => [...row].forEach((v, i) => { if (v === '1') ras.set(nx + 4 + i, ny + j, ink); }));
+  } else {
+    const nx = c - 3, ny = c - 1;
+    ['110', '001', '010', '111'].forEach((row, j) => [...row].forEach((v, i) => { if (v === '1') ras.set(nx + i, ny + j, ink); }));
+    ['111', '101', '101', '111'].forEach((row, j) => [...row].forEach((v, i) => { if (v === '1') ras.set(nx + 4 + i, ny + j, ink); }));
+  }
+  ras.outline(out, false);
+  const cv = ras.toCanvas();
+  D20_SPRITES.set(r, cv);
+  return cv;
+}
 function d20(ctx, cx, cy, r, glow) {
-  const pts = []; for (let i = 0; i < 6; i++) { const a = -Math.PI / 2 + i * Math.PI / 3; pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]); }
+  const prevAlpha = ctx.globalAlpha;
   if (glow > 0) {
     ctx.globalCompositeOperation = 'lighter';
-    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 3);
-    g.addColorStop(0, `rgba(255,200,110,${0.35 * glow})`); g.addColorStop(1, 'rgba(255,170,90,0)');
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 2.5);
+    g.addColorStop(0, `rgba(255,200,110,${0.26 * glow})`); g.addColorStop(1, 'rgba(255,170,90,0)');
     ctx.fillStyle = g; ctx.fillRect(cx - r * 3, cy - r * 3, r * 6, r * 6);
     ctx.globalCompositeOperation = 'source-over';
   }
-  // body
-  ctx.fillStyle = '#5b1a24';
-  for (let y = -r; y <= r; y++) { const w = Math.round((r - Math.abs(y) * 0.5) * 0.87); ctx.fillRect(Math.round(cx - w), Math.round(cy + y), w * 2 + 1, 1); }
-  const tri = [[cx, cy - r * 0.55], [cx - r * 0.55, cy + r * 0.38], [cx + r * 0.55, cy + r * 0.38]];
-  ctx.fillStyle = '#8e2a35';
-  for (let y = Math.round(tri[0][1]); y <= Math.round(tri[1][1]); y++) { const k = (y - tri[0][1]) / (tri[1][1] - tri[0][1]); const w = Math.round(k * r * 0.55); ctx.fillRect(Math.round(cx - w), y, w * 2 + 1, 1); }
-  const gold = '#f2c25a', goldD = '#a8692a';
-  for (let i = 0; i < 6; i++) line(ctx, pts[i][0], pts[i][1], pts[(i + 1) % 6][0], pts[(i + 1) % 6][1], gold);
-  for (let i = 0; i < 3; i++) line(ctx, tri[i][0], tri[i][1], tri[(i + 1) % 3][0], tri[(i + 1) % 3][1], gold);
-  line(ctx, tri[0][0], tri[0][1], pts[0][0], pts[0][1], goldD); line(ctx, tri[1][0], tri[1][1], pts[4][0], pts[4][1], goldD); line(ctx, tri[2][0], tri[2][1], pts[2][0], pts[2][1], goldD);
-  line(ctx, tri[1][0], tri[1][1], pts[3][0], pts[3][1], goldD); line(ctx, tri[2][0], tri[2][1], pts[3][0], pts[3][1], goldD);
-  line(ctx, tri[0][0], tri[0][1], pts[5][0], pts[5][1], goldD); line(ctx, tri[0][0], tri[0][1], pts[1][0], pts[1][1], goldD);
-  // "20"
-  ctx.fillStyle = '#ffe9a8';
-  const nx = Math.round(cx) - 3, ny = Math.round(cy) - 1;
-  [[0, 0], [1, 0], [2, 1], [1, 2], [0, 3], [1, 3], [2, 3]].forEach(([a, b]) => ctx.fillRect(nx + a, ny + b, 1, 1));
-  [[4, 0], [5, 0], [4, 1], [6, 1], [4, 2], [6, 2], [4, 3], [5, 3], [6, 0], [6, 3]].forEach(([a, b]) => ctx.fillRect(nx + a, ny + b, 1, 1));
+  ctx.globalAlpha = prevAlpha;
+  const img = buildUiD20(r);
+  ctx.drawImage(img, Math.round(cx - img.width / 2), Math.round(cy - img.height / 2));
 }
 
 // ---------- start / loading screen ----------
@@ -235,6 +288,7 @@ function bubbleBox(ctx, x, y, w, h, tail) {
 }
 
 export function drawBubbles(ctx, uctx, p, t) {
+  if (elminsterSkipped) return;
   for (const key of ['line1', 'line2']) {
     const d = DIALOGUE[key];
     for (const b of d.bubbles) {
@@ -277,8 +331,8 @@ function drawWrapped(uctx, lines, revealed, x, y, lh, color) {
 // covers the hero (left), the rats (centre) or the action belt (bottom right).
 export const HUD = { x: 202, y: 60, w: 236, h: 54 };
 const boxNow = { h: HUD.h };                                  // the box grows a row for long lines
-export const boxBottom = () => HUD.y + boxNow.h;
-export const inHUD = (gx, gy) => gx >= HUD.x && gx < HUD.x + HUD.w && gy >= HUD.y - 8 && gy < HUD.y + boxNow.h;
+export const boxBottom = () => elminsterSkipped ? 56 : HUD.y + boxNow.h;
+export const inHUD = (gx, gy) => !elminsterSkipped && gx >= HUD.x && gx < HUD.x + HUD.w && gy >= HUD.y - 8 && gy < HUD.y + boxNow.h;
 const PW = 36;                                   // portrait well: the 72px portrait at 1:1 on the 2x UI canvas
 let snortAt = null;                              // Beat 8: Elminster's amused pipe-puff snort
 export function snort(t) { snortAt = t; }
@@ -351,7 +405,7 @@ function paintFrame(ctx, x, y, w, h) {
 }
 
 export function drawHUD(ctx, uctx, t) {
-  if (t < T.hudIn[0]) return;
+  if (elminsterSkipped || t < T.hudIn[0]) return;
   const k = easeOutBack(clamp(inv(T.hudIn[0], T.hudIn[1], t)));
   const y = Math.round(HUD.y - (1 - k) * 90), x = HUD.x;      // drops in from above
   const d = hudLine(t);
@@ -415,7 +469,8 @@ export function drawHUD(ctx, uctx, t) {
   uctx.globalAlpha = 1;
   uctx.restore();
   // name text
-  const nX = Math.round((nx + nw / 2) * S - C.nameS.width / 2), nY = Math.round((ny + 6) * S - C.nameS.height / 2);
+  const nX = Math.round((nx + nw / 2) * S - C.nameS.inkW / 2 - C.nameS.inkX);
+  const nY = Math.round((ny + 6) * S - C.nameS.inkH / 2 - C.nameS.inkTop);
   uctx.drawImage(C.nameSSh, nX, nY + 2);
   uctx.drawImage(C.nameS, nX, nY);
   // dialogue text
@@ -427,6 +482,82 @@ export function drawHUD(ctx, uctx, t) {
       const ax = x + HUD.w - 15, ay = y + hh - 12 + bob;
       ctx.fillStyle = '#140b0c'; ctx.fillRect(ax - 1, ay - 1, 7, 1);
       for (let r = 0; r < 3; r++) { ctx.fillStyle = '#140b0c'; ctx.fillRect(ax + r - 1, ay + r, 7 - r * 2, 1); ctx.fillStyle = r === 0 ? '#ffe39a' : '#d9a53f'; ctx.fillRect(ax + r, ay + r, 5 - r * 2, 1); }
+    }
+    const sr = skipRect(t);
+    if (sr && sr.mode === 'hud') drawOakTab(ctx, uctx, sr, C.skipHud, C.skipHudSh);
+  }
+}
+
+function skipRect(t) {
+  if (elminsterSkipped) return null;
+  if (t < T.beat1) return { x: W - 62, y: 8, w: 54, h: 14, mode: 'intro' };
+  if (t >= T.hudIn[1]) return { x: HUD.x + HUD.w - 42, y: HUD.y - 8, w: 34, h: 11, mode: 'hud' };
+  return null;
+}
+
+export function inSkip(gx, gy, t) {
+  const r = skipRect(t);
+  return !!r && gx >= r.x && gx < r.x + r.w && gy >= r.y && gy < r.y + r.h;
+}
+
+function drawOakTab(ctx, uctx, r, lbl, sh) {
+  ctx.fillStyle = '#140b0c'; ctx.fillRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2);
+  ctx.fillStyle = '#5c3b1e'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.fillStyle = '#a1703f'; ctx.fillRect(r.x, r.y, r.w, 1);
+  ctx.fillStyle = '#3d2414'; ctx.fillRect(r.x, r.y + r.h - 1, r.w, 1);
+  ctx.fillStyle = '#d9a948';
+  ctx.fillRect(r.x + 1, r.y + 1, 1, 1); ctx.fillRect(r.x + r.w - 2, r.y + 1, 1, 1);
+  ctx.fillRect(r.x + 1, r.y + r.h - 2, 1, 1); ctx.fillRect(r.x + r.w - 2, r.y + r.h - 2, 1, 1);
+  if (lbl && sh) {
+    const lx = Math.round((r.x + r.w / 2) * S - lbl.inkW / 2 - lbl.inkX);
+    const ly = Math.round((r.y + r.h / 2) * S - lbl.inkH / 2 - lbl.inkTop);
+    uctx.drawImage(sh, lx, ly + 1);
+    uctx.drawImage(lbl, lx, ly);
+  }
+}
+
+export function drawSkipButton(ctx, uctx, t) {
+  const r = skipRect(t);
+  if (r && r.mode === 'intro') drawOakTab(ctx, uctx, r, C.skipIntro, C.skipIntroSh);
+}
+
+const speech = { key: '', len: 0, lastAt: -1, lastT: -1 };
+export function resetSpeech() { speech.key = ''; speech.len = 0; speech.lastAt = -1; speech.lastT = -1; }
+export function pollSpeech(t, now, onChar) {
+  if (elminsterSkipped) return;
+  if (speech.lastT >= 0 && t < speech.lastT - 0.1) resetSpeech();
+  speech.lastT = t;
+  let key = '', cur = '';
+  if (t < T.hudIn[0]) {
+    for (const k of ['line1', 'line2']) {
+      const d = DIALOGUE[k];
+      for (let bi = 0; bi < d.bubbles.length; bi++) {
+        const b = d.bubbles[bi], [s, e] = b.show;
+        if (t >= s + 0.16 && t <= e) {
+          key = `${k}:${bi}`;
+          cur = revealText(b.segs, d.at, t).text;
+        }
+      }
+    }
+  } else if (t >= T.hudIn[1]) {
+    const d = hudLine(t);
+    if (d && (!d.skip || t < d.skip)) {
+      key = `${d.clip || d.at}:${d.segs[0][0]}`;
+      cur = revealText(d.segs, d.at, t).text;
+    }
+  }
+  if (!key) { speech.key = ''; speech.len = 0; return; }
+  if (key !== speech.key) { speech.key = key; speech.len = 0; }
+  if (cur.length > speech.len) {
+    const added = cur.slice(speech.len);
+    speech.len = cur.length;
+    if (now - speech.lastAt >= 0.055) {
+      const ch = [...added].find(c => /[a-z0-9]/i.test(c));
+      if (ch) {
+        speech.lastAt = now;
+        const tail = cur.slice(-1);
+        onChar(tail === '?' || tail === '!' ? tail : ch, cur);
+      }
     }
   }
 }

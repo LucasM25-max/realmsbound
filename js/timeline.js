@@ -107,9 +107,8 @@ Object.assign(DIALOGUE, {
   line14: live('A helmet. Of sorts. Wear it. Gear changes thee, outside and in.'),
   line14b: live('*snort* …It suits thee, sellsword. Gods help thee.'),
   gearNudge: live('The Gear tab, sellsword. Bottom right, the little pack. Gear changes thee — wear thy spoils.'),
-  // Beat 9: the first level-up (beat9.js sets .at)
-  line15: live('Ha! Feel that, sellsword? LEVEL TWO. The Weave sings in thy bones. Or that is the pie. Either way — savour it.'),
-  line15b: live('Thou hast earned ACTION SURGE — once a fight, act twice. The second socket on thy belt is thine. The slot beside Second Wind.'),
+  // Beat 9: Stage 1 closing word (beat9.js sets .at)
+  line15: live('Ten foes cleared — well on thy way to Level Two, sellsword. Keep swinging!'),
   // milestone quips: two tiers per track (beat6.js sets .at when a ×2-style rank is crossed)
   mq_weapon_0: live('Twice the blow. That pell has a family, thou knowest.'),
   mq_weapon_1: live('Harder still. The rats of Shadowdale grow nervous.'),
@@ -124,8 +123,19 @@ Object.assign(DIALOGUE, {
   mq_conditioning_0: live('Deeper breath, steadier heart. Do not test it overmuch.'),
   mq_conditioning_1: live('Thy stamina shames archmages I could name. I shall not.'),
 });
+export let elminsterSkipped = false;
+export function skipElminster() { elminsterSkipped = true; }
+export function resetSkipElminster() { elminsterSkipped = false; }
+export function isElminsterSkipped() { return elminsterSkipped; }
+
 export function resetLiveLines() { for (const d of Object.values(DIALOGUE)) if (d.dyn) d.at = Infinity; }
-export function lineEnd(d) { const s = d.segs || d.bubbles.flatMap(b => b.segs); return d.at + s[s.length - 1][2]; }
+export function lineEnd(d) {
+  const s = d.segs || d.bubbles.flatMap(b => b.segs);
+  const end = d.at + s[s.length - 1][2];
+  if (elminsterSkipped) return Math.min(end, d.at + 0.45);
+  if (d.skip && isFinite(d.skip)) return Math.min(end, d.skip + 0.15);
+  return end;
+}
 
 // the line currently shown in the dialogue box: the most recently started one
 export function hudLine(t) {
@@ -136,8 +146,10 @@ export function hudLine(t) {
 
 // Where Elminster is "speaking" (for talk-bob animation)
 export function speakingAt(t) {
+  if (elminsterSkipped) return false;
   for (const k of Object.keys(DIALOGUE)) {
     const d = DIALOGUE[k];
+    if (d.skip && t >= d.skip) continue;
     const segs = d.segs || d.bubbles.flatMap(b => b.segs);
     if (!(t >= d.at)) continue;
     for (const s of segs) if (t >= d.at + s[1] && t <= d.at + s[2]) return true;

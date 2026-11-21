@@ -183,6 +183,32 @@ export class AudioEngine {
     S.duck.gain.setTargetAtTime(0.42, at - 0.05, 0.12);
     S.duck.gain.setTargetAtTime(1.0, end - 0.2, 0.4);
   }
+  // Animal-Crossing-style elder-wizard mumble burble triggered per revealed syllable
+  mumble(ch = 'a', tone = 0) {
+    if (!this.ctx || !this.session) return;
+    const c = this.ctx, S = this.session, at = c.currentTime + 0.004;
+    const lower = String(ch).toLowerCase();
+    const code = lower.charCodeAt(0) || 97;
+    const formants = { a: 740, e: 560, i: 430, o: 610, u: 470, '?': 780, '!': 720 };
+    const fForm = formants[lower] || (430 + (code % 9) * 48);
+    const pitchMul = lower === '?' ? 1.18 : lower === '!' ? 1.1 : 1;
+    const f0 = (138 + ((code * 7 + tone * 3) % 7) * 5.5) * pitchMul;
+    const bp = c.createBiquadFilter();
+    bp.type = 'bandpass'; bp.Q.value = 2.5;
+    bp.frequency.setValueAtTime(fForm * 0.9, at);
+    bp.frequency.exponentialRampToValueAtTime(fForm * 1.12, at + 0.045);
+    const g = c.createGain();
+    bp.connect(g); g.connect(S.voice);
+    this.env(g, at, 0.008, 0.065, 0.048);
+    const o1 = c.createOscillator(); o1.type = 'triangle';
+    o1.frequency.setValueAtTime(f0, at);
+    o1.frequency.exponentialRampToValueAtTime(f0 * (lower === '?' ? 1.14 : 0.93), at + 0.055);
+    o1.connect(bp); o1.start(at); o1.stop(at + 0.065);
+    const o2 = c.createOscillator(), g2 = c.createGain();
+    o2.type = 'sawtooth'; o2.frequency.setValueAtTime(f0 * 0.5, at);
+    g2.gain.value = 0.22; o2.connect(g2); g2.connect(bp);
+    o2.start(at); o2.stop(at + 0.065);
+  }
 
   // ---- instruments ----
   env(g, at, a, peak, dec, end = 0.0008) { g.gain.setValueAtTime(0.0001, at); g.gain.linearRampToValueAtTime(peak, at + a); g.gain.exponentialRampToValueAtTime(end, at + a + dec); }
