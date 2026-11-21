@@ -1,0 +1,15 @@
+<!doctype html><html><body style="margin:0;background:#2a2433">
+<canvas id="c" width="1280" height="900" style="image-rendering:pixelated"></canvas>
+<script type="module">
+import { buildElminster, buildPortrait } from './js/art/elminster.js';
+const c = document.getElementById('c'), x = c.getContext('2d'); x.imageSmoothingEnabled = false;
+const fr = [0, 1, 2].map(i => buildPortrait(i).toCanvas());
+x.drawImage(fr[0], 10, 10, 72 * 6, 72 * 6);
+x.drawImage(fr[1], 452, 10, 72 * 6, 72 * 6);
+x.drawImage(fr[2], 894, 10, 72 * 5, 72 * 5);
+// actual in-game size (2x) and 3x
+x.drawImage(fr[0], 10, 460, 144, 144); x.drawImage(fr[1], 164, 460, 144, 144);
+x.drawImage(fr[0], 320, 460, 216, 216);
+const e = buildElminster(); x.drawImage(e.idle, 560, 460, e.idle.width * 5, e.idle.height * 5);
+window.__ok = true;
+</script></body></html>
