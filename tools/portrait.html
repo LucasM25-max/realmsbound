@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>body{background:#181022;margin:0;display:flex;align-items:center;justify-content:center;height:100vh}canvas{image-rendering:pixelated}</style></head>
+<body><canvas id="c" width="760" height="360"></canvas>
+<script type="module">
+import { buildPortrait } from '../js/art/elminster.js';
+const c = document.getElementById('c'), x = c.getContext('2d');
+x.imageSmoothingEnabled = false;
+const p = [0, 1, 2].map(f => buildPortrait(f).toCanvas());
+// left column: the three talk frames at 1.5×
+p.forEach((img, i) => x.drawImage(img, 8 + i * 116, 8, 108, 108));
+// middle: frame 0 at 4×
+x.drawImage(p[0], 8, 124, 288, 288);
+// right: face close-up (brows/eyes/nose) at 8×
+x.drawImage(p[0], 12, 12, 52, 42, 320, 8, 416, 336);
+window.__done = true;
+</script></body></html>

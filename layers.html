@@ -1,0 +1,22 @@
+<!doctype html><html><body style="margin:0;background:#000">
+<canvas id="c" width="640" height="360" style="width:1280px;height:720px;image-rendering:pixelated"></canvas>
+<script type="module">
+import { buildSkull, buildHills } from './js/art/landscape.js';
+const q = new URLSearchParams(location.search), show = (q.get('l') || 'skull,hills').split(',');
+const c = document.getElementById('c'), x = c.getContext('2d');
+const g = x.createLinearGradient(0, 0, 0, 360); g.addColorStop(0, '#5a4a8a'); g.addColorStop(0.55, '#d8a0b0'); g.addColorStop(1, '#f4c8a0');
+x.fillStyle = g; x.fillRect(0, 0, 640, 360);
+const msg = [];
+const T = (n, f) => { const t0 = performance.now(); try { const r = f(); msg.push(n + ' ' + Math.round(performance.now() - t0) + 'ms'); return r; } catch (e) { msg.push(n + ' ERR ' + e.message + ' @ ' + (e.stack || '').split('\n')[1]); } };
+const mods = {
+  skull: async () => (await import('./js/art/landscape.js')).buildSkull(640),
+  hills: async () => (await import('./js/art/landscape.js')).buildHills(640),
+  village: async () => (await import('./js/art/village.js')).buildVillage(640),
+  near: async () => (await import('./js/art/meadow.js')).buildNear(640),
+  meadow: async () => (await import('./js/art/meadow.js')).buildMeadow(640),
+};
+const Y = { skull: 0, hills: 0, village: 0, near: 0, meadow: 0 };
+for (const k of show) { let r; const t0 = performance.now(); try { r = await mods[k](); msg.push(k + ' ' + Math.round(performance.now() - t0) + 'ms'); } catch (e) { msg.push(k + ' ERR ' + e.message + ' @ ' + (e.stack || '').split('\n')[1]); }
+  if (r) { const m = await import('./js/art/village.js'); const mm = await import('./js/art/meadow.js'); const y = k === 'village' ? (m.VILLAGE_Y ?? 0) : k === 'near' ? mm.NEAR_Y : k === 'meadow' ? mm.GROUND_Y : 0; x.drawImage(r.toCanvas(), 0, y); } }
+console.log(msg.join(' | ')); window.__ok = true;
+</script></body></html>

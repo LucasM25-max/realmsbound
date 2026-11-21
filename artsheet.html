@@ -1,0 +1,17 @@
+<!doctype html><html><body style="margin:0;background:#334">
+<canvas id="c" width="1280" height="900" style="image-rendering:pixelated"></canvas>
+<script type="module">
+import { buildHero } from './js/art/hero.js';
+import { buildElminster, buildPortrait } from './js/art/elminster.js';
+const c = document.getElementById('c'), x = c.getContext('2d'); x.imageSmoothingEnabled = false;
+const h = buildHero(), e = buildElminster(), p = buildPortrait(0), p1 = buildPortrait(1);
+const S = 5;
+h.walk.forEach((f, i) => x.drawImage(f, 10 + i * 150, 10, f.width * 3, f.height * 3));
+h.idle.forEach((f, i) => x.drawImage(f, 10 + i * 150, 220, f.width * 3, f.height * 3));
+x.drawImage(h.walk[0], 320, 220, h.walk[0].width * S, h.walk[0].height * S);
+['idle','talk','blink'].forEach((k, i) => x.drawImage(e[k], 560 + i * 170, 220, e[k].width * 3, e[k].height * 3));
+x.drawImage(e.idle, 10, 560, e.idle.width * 5, e.idle.height * 5);
+x.drawImage(p.toCanvas(), 300, 560, 72 * 4, 72 * 4);
+x.drawImage(p1.toCanvas(), 600, 560, 72 * 4, 72 * 4);
+window.__ok = true;
+</script></body></html>

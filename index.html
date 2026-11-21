@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Realmsbound — Stage 1: Old Skull Meadow</title>
+  <link rel="stylesheet" href="b/__BUILD__/css/style.css" onerror="this.onerror=null;this.href='css/style.css'">
+</head>
+<body>
+  <div id="stage" aria-label="Realmsbound opening scene">
+    <canvas id="game" width="640" height="360"></canvas>
+    <canvas id="ui" width="1280" height="720"></canvas>
+    <button class="ctl" id="mute" title="Mute (M)">
+      <svg viewBox="0 0 9 9" fill="#ffe39a">
+        <rect x="0" y="3" width="2" height="3"/><rect x="2" y="2" width="1" height="5"/><rect x="3" y="1" width="1" height="7"/>
+        <g class="wave"><rect x="5" y="3" width="1" height="3"/><rect x="7" y="2" width="1" height="5"/></g>
+        <g class="x" fill="#ff8a7a"><rect x="5" y="3" width="1" height="1"/><rect x="6" y="4" width="1" height="1"/><rect x="7" y="5" width="1" height="1"/><rect x="7" y="3" width="1" height="1"/><rect x="5" y="5" width="1" height="1"/></g>
+      </svg>
+    </button>
+  </div>
+    <div id="build" aria-hidden="true">build __BUILD__ · __BUILT__</div>
+  <script type="module">
+    // cache-proof boot: load this build's modules from a versioned path (see tools/serve.py);
+    // fall back to the plain path when the page is served by something else
+    const B = '__BUILD__';
+    window.__BUILD = B;
+    if (B.startsWith('__')) document.getElementById('build').textContent = 'build: local';
+    import(B.startsWith('__') ? './js/main.js' : `./b/${B}/js/main.js`).catch(e => { console.warn('versioned load failed', e); return import('./js/main.js'); });
+  </script>
+</body>
+</html>
