@@ -1,0 +1,277 @@
+Your pixel art and UI aesthetic already look fantastic—the lighting over Old Skull, Elminster on the fence, the carved-wood/parchment framing, the `Boss in 4` tracker, and the locked/padlocked button treatment in the bottom-right dock hit the exact tone of the design doc.
+
+Below is:
+1. **A detailed UI/UX audit of your Stage 1 screenshots** (pointing out specific bugs, legibility tweaks, and mismatches with our Stage 1–1,000 progression plan).
+2. **The exact Stage 1 UI Specification** showing how every button, ability slot, and menu tab appears at Stage 1—following your strict rule that **every inaccessible option is visible, greyed out, and padlocked**.
+3. **A complete Screen-by-Screen UI Blueprint (Stages 1 → 1,000)**, with dedicated architectural space built in for **full 2024 Character Respecs**, **Guild Roster / New Character Creation**, and **Assigned Set-Length Campaigns** (*The Black Network*, *Ravenloft: The Horrors Within*, *Arcana Unleashed: Deadfall*).
+
+---
+
+# Part 1: Specific Alterations Needed From Your Stage 1 Screenshots
+
+Looking closely at both images, here are the concrete issues and polish fixes to make before scaling up:
+
+### 1. Expand the Bottom-Right Dock From 2+3 to 5+6 (All Future Mechanics Visible & Padlocked)
+* **What's there now:** Your dock currently shows **2 Ability Slots** (`[1 🔒]`, `[2 🔒 Potion 0]`) and **3 Tabs** (`Train`, `Gear`, `Hero`).
+* **What needs altering:** Under your rule that *all inaccessible features stay visible, greyed out, and padlocked*, players at Stage 1 cannot see **Action Surge**, **Heroic Inspiration**, **Class Mechanic**, **Tactics/Gambits**, **World/Bastions/Prestige**, or **Campaigns**.
+* **The Fix:** Widen the bottom dock along the unused grass edge into two tidy attached trays:
+  * **Ability Tray (5 circular sockets, hotkeys `1–5`):** All 5 visible & padlocked at Stage 1 → `1: Second Wind 🔒` | `2: Action Surge 🔒` | `3: Potions 🔒 (0)` | `4: Inspiration 🔒 (0)` | `5: Class Skill 🔒`.
+  * **Menu Tab Tray (6 square tabs, hotkeys `T, G, H, B, W, C`):** `Train (T)` (unlocked mid-Stage 1) | `Gear (G) 🔒` | `Hero (H) 🔒` | `Gambits (B) 🔒` | `World (W) 🔒` | `Campaigns (C) 🔒`.
+  * *(Note: Keep the `"Now"` goal pill—`⚔ Weapon Drills R1 [coin] 10`—floating cleanly above the Menu Tab Tray just as you already placed it!)*
+
+### 2. Lock the Top-Right `1×` Speed & `Auto` Controls at Stage 1
+* **What's there now:** In both screenshots, `▶▶1x` and `□ Auto` use the active carved-wood button style (same as the Audio button), making them look clickable at Stage 1.
+* **The Fix:** Grey out and padlock both at Stage 1: **`🔒 1x`** (*tooltip: "2× Speed unlocks at Stage 20"*) and **`🔒 Auto`** (*tooltip: "Auto-Advance unlocks at Stage 10"*). Only the Audio icon stays unlocked.
+
+### 3. Fix Three Text & Icon Clarity Issues on the Training Yard Modal (Screenshot 2)
+* **Issue A — Confusing `+` beside `10 cp` on the Buy Button:** On `Weapon Drills`, `BUY · RANK 1  + 10 cp` has a little gold icon/plus right before `10 cp` that makes it look like *"gain +10 cp"* rather than *"costs 10 cp"*. Replace that `+` with the exact **copper coin sprite** from the purse (`BUY · RANK 1 · [coin] 10 cp`).
+* **Issue B — Overlapping Ghost Text on the Locked `Armour Drills` Button:** Right now `"LOCKED"` sits directly on top of dim `"BUY · RANK 1"` and `"15 cp"` text, creating visual mush. Either remove `"BUY · RANK 1"` on locked buttons so it reads cleanly **`🔒 UNLOCKS STAGE 2 · [coin] 15 cp`**, or keep the ghost button clean with just **`🔒 LOCKED`** and put `Cost: 15 cp` in the card body.
+* **Issue C — Conflicting Lock Reason on `Armour Drills`:** The `Armour Drills` card currently shows a padlock **AND** red text saying `"Thy purse is short."` At Stage 1, `Armour Drills` is locked by **Stage progression** (Stage 2), not just gold. Rule: **Stage-locked cards** show neutral/amber text (`"Unlocks at Stage 2"`); **unlocked-but-unaffordable cards** show red `"Thy purse is short."`
+
+### 4. Make the Hero's Round Clock Visually Distinct From Enemy HP
+* **What's there now:** In Screenshot 1, the progress bar at the Hero's feet is nearly the same red-orange colour as the Giant Rat's HP bar floating above it.
+* **The Fix:** Change the Hero’s Round Clock timer under their boots (or tucked on their portrait edge) to a **gold-rimmed cyan/amber dial or bar**, keeping **red** strictly for HP so combat readability stays instant when 5+ monsters crowd the screen.
+
+### 5. Bump Small Bitmap Body Font & Pagination Clarity
+* **What's there now:** In Screenshot 2, tiny text like `"Sword work at the pell: edge and form"`, `"Each rank: a tenth harder"`, and `"T · close"` uses a very tight `5px` font where `m / n / r / t` start to blur together.
+* **The Fix:** Step body text up by `+1–2px` (or use cleaner pixel kerning), add **`● ○ ○` page pips** between `<` and `>` at the bottom-left of Training Yard so players immediately know **all 6 Martial Drills** are browsable across 3 pages (`Weapon/Armour`, `Scavenging/Footwork`, `Conditioning/Tactics`), and keep a visible **greyed-out sub-tab** at the top of the modal for `Realms Mastery 🔒 (Stage 100)`.
+
+### 6. Minor Polish Items Spotted in Screenshot 1
+* **Elminster's Chimney Smoke:** Right now the wizard tower puffs pale grey smoke. Giving it occasional **green/violet/blue pixel puffs** nails the quirky Shadowdale flavour from Beat 0!
+* **Top-Left `>> Action Surge [2]` Badge:** Keep this exact widget! Because Hero Level 2 now lands at **Stage 3**, having `>> Action Surge [2]` sit directly below your `XP` bar on Stage 1 acts as your permanent **"Soon" Goal preview**. (Once Lv 2 is reached, it swaps to `>> Champion [3]`, then `>> Feat / ASI [4]`, then `>> Extra Attack [5]`, etc.)
+* **Elminster Dialogue vs Bottom Dock Spacing:** When Elminster's `64×64` dialogue box appears during Beats 0–10, anchor it **bottom-left** (`x=10–250`) so it never collides with the bottom-right Ability/Menu Dock or the `Weapon Drills` Goal pill.
+
+---
+
+# Part 2: Exact Stage 1 UI State (Every Screen & Padlock)
+
+Here is how the **entire interface** behaves on **Stage 1 (Minute 0–3)**, showing what is active versus what is visible, greyed out, and padlocked:
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│ [Portrait] Sellsword · Fighter   [S1] Old Skull Meadow ▓░░░░░░░ 1/10 [P]  │ [💰 0 cp]
+│ [Lv 1] ♥ ▓▓▓▓▓▓▓▓▓ 12/12           ◉───□───□───□───💀 Boss in 4          │ [🔒1x][🔒Auto][🔊]
+│        XP ▓▓░░░░░░░                                                       │
+│        >> Action Surge [2]                                                │
+├───────────────────────────────────────────────────────────────────────────┤
+│                                                                      ┌───┐│
+│   [Parallax Dawn Meadow: Old Skull, Wizard Tower, Inn, Elminster]    │➡ ││
+│                                                                      │🔒 ││
+│      🧍 Hero (Pie Tin later)     🎲16 HIT      🐀 Giant Rat          └───┘│
+│      ◷ (Cyan Round Bar)          +8 XP         ♥ ▓▓░░░                    │
+│                                                                           │
+│  [Elminster Portrait Frame: bottom-left when speaking]  ┌────────────────┐│
+│                                                         │⚔ Weapon Drills ││
+│                                                         │  R1   🪙 10    ││
+├─────────────────────────────────────────────────────────┴────────────────┴┤
+│ [1 🔒] [2 🔒] [3 🔒] [4 🔒] [5 🔒]  │  [T]    [G 🔒] [H 🔒] [B 🔒] [W 🔒] [C 🔒] │
+│  SW     AS    Pot(0) Insp(0) Class  │ Train   Gear   Hero  Gambit World  Camp. │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+### Stage 1 Element-by-Element State Table
+
+| UI Area | Element | Stage 1 State | Unlocks At | Padlock Hover Tooltip |
+|---|---|---|---|---|
+| **Top-Right** | `1×` Speed Button | **Greyed + `🔒`** | Stage 20 | *"2× Speed unlocks at Stage 20"* |
+| **Top-Right** | `Auto` Advance Toggle | **Greyed + `🔒`** | Stage 10 | *"Auto-Advance unlocks at Stage 10"* |
+| **Top-Right** | Audio Toggle (`🔊`) | **Active** | Stage 1 | Mute / unmute SFX & music |
+| **Right Edge** | Next Stage (`➡`) | **Greyed + `🔒`** | `10/10` kills | *"Clear 10 foes to advance"* (pulses gold at `10/10`) |
+| **Goal Pill** | `⚔ Weapon Drills R1 🪙 10` | **Dimmed → Gold Pulse at 10 cp** | Stage 1 | Always shows cheapest `"Now"` upgrade |
+| **Ability 1** | `Second Wind` | **Greyed + `🔒`** | Stage 4 | *"Unlocks at Stage 4 (Ashaba Ford)"* |
+| **Ability 2** | `Action Surge` | **Greyed + `🔒`** | Hero Lv 2 (Stage 3) | *"Unlocks at Hero Level 2"* |
+| **Ability 3** | `Potions (0)` | **Greyed + `🔒`** | Stage 3–4 | *"Unlocks when Hedrun shares Potions"* |
+| **Ability 4** | `Inspiration (0)` | **Greyed + `🔒`** | Stage 15 | *"Reroll failed d20s — Unlocks Stage 15"* |
+| **Ability 5** | `Class Mechanic` | **Greyed + `🔒`** | Hero Lv 9 (or Respec) | *"Tactical Master / Class Skill — Lv 9"* |
+| **Tab `T`** | **Train** | **`🔒` until Beat 6 → Active** | Beat 6 (~`10 cp`) | Opens Training Yard |
+| **Tab `G`** | **Gear** | **Greyed + `🔒`** | Beat 7–8 (Pie Tin drop) | *"Opens when you find your first Gear!"* |
+| **Tab `H`** | **Hero** | **Greyed + `🔒`** | Stage 1 Beat 10b / Stage 2 | *"Customise look, feats & builds"* |
+| **Tab `B`** | **Gambits** | **Greyed + `🔒`** | Stage 17 | *"Automate your hero — Unlocks Stage 17"* |
+| **Tab `W`** | **World** | **Greyed + `🔒`** | Stage 25 | *"Map, Town, Factions & Prestige — Stg 25"* |
+| **Tab `C`** | **Campaigns** | **Greyed + `🔒`** | Stage 100 | *"The War Table — Unlocks at Stage 100"* |
+
+*(Crucial UX rule: **Even inside unlocked tabs**, every future sub-tab or feature button stays visible, greyed out, and padlocked!)*
+
+---
+
+# Part 3: Complete Screen-by-Screen UI Blueprint (Stages 1 → 1,000)
+
+Every modal window shares your **carved-wood outer frame, warm cream parchment cards, brass corner rivets, `[<] [>]` page controls, and `[DONE]` / hotkey close button**. Below is the exact layout of **every screen and sub-tab** across the entire 1,000-stage game.
+
+---
+
+## Screen 1: Battlefield & Pop-Up Overlays (`Home`)
+
+* **Persistent Combat HUD:** As shown above. At Stage 25+, tapping the **Stage Name plaque (`Old Skull Meadow`)** opens a compact tooltip listing current **Biome Hazards & Modifiers** (e.g., *Extreme Cold, The Rusting, Shaking Plague, Damaged Mythal*) and whether your equipped gear counters them.
+* **Push / Farm Toggle (`[P]` / `[F]` pill right of Quota Bar):** Locked (`🔒`) during Tutorial Stages 1–25; active from Stage 26 onward to loop a stage for Materials or Bestiary kills.
+* **Modal Overlays (Triggered on Battlefield):**
+  1. **Elminster / Guide Dialogue Bar (Bottom-Left):** `64×64` carved frame with portrait (Elminster in `1–25`, Alias/Dragonbait in `26–100`, Karlach in `101–200`, Caitlyn in `201–300`, Markham in `301–400`, Deryan Kaya in `401–500`), max 2 lines of text, tap-anywhere advance.
+  2. **Boss Splash Banner:** 1.5-second dramatic parchment scroll (*`"SKRAG TURNIPTEETH — Self-Crowned Lord of the Bridge"`*) + top-center **Boss HP & Countdown Timer** + **Legendary Resistance pips** (`◆ ◆` diamonds starting Stage 26!).
+  3. **Skill Event Card (`Stage 12+`):** Center parchment card pausing combat for ~3 seconds (auto-resolves if idle!). Shows 2–3 skill choices (*e.g. `Athletics +5 (70%)` vs `Sleight of Hand +1 (50%)`*), rolls an oversized tumbling d20, and offers **Tactical Mind (`+1d10`)** or **Heroic Inspiration reroll** if it fails.
+  4. **Level-Up & Tarot Card Choice:** Golden pillar animation + flipping tarot cards for Subclasses, Feats, ASIs, and Epic Boons (with 5-second looping `"Try It"` sprite animation + projected DPS delta).
+  5. **Death Save Drama Overlay:** Screen desaturates and slows while three d20s roll sequentially (`≥10` = gold check, `<10` = red skull; Nat 20 = full HP burst!).
+  6. **"While You Were Away" Letter (`Stage 19+`):** Sealed parchment letter from Elminster summarizing offline Gold, XP, Stages cleared, and Items salvaged.
+
+---
+
+## Screen 2: Training Yard Tab (`[T]` — *Resets on Prestige*)
+
+### Top Sub-Tab Strip
+`[ Martial Drills (Active) ]` | `[ Realms Mastery 🔒 Stg 100 ]`
+
+### Sub-Tab A: Martial Drills *(All 6 Cards Visible from Stage 1)*
+Uses your exact **2-card spread with `<` `● ○ ○` `>` pagination** and top-right **Buy Multiplier (`×1`, `×10 🔒 Stg 5`, `×25 🔒 Stg 25`, `Next ×2 🔒 Stg 50`)**:
+* **Page 1:**
+  * Left: **Weapon Drills** *(Unlocked Stage 1 Beat 6 — `10 cp`)*
+  * Right: **Armour Drills** *(`🔒 Stage 2` — `15 cp`)*
+* **Page 2:**
+  * Left: **Scavenging** *(`🔒 Stage 2` — `20 cp`; shows `[Rank 5: Auto-Collect]` pip on its 10-pip milestone bar!)*
+  * Right: **Footwork** *(`🔒 Stage 2` — `25 cp`)*
+* **Page 3:**
+  * Left: **Conditioning** *(`🔒 Stage 4` — `50 cp`)*
+  * Right: **Tactics** *(`🔒 Stage 5` — `1 sp`; notes Rank 250/500 `+1 Crit Range`)*
+
+### Sub-Tab B: Realms Mastery *(Visible & Padlocked at Stage 1 → Unlocks Stage 100)*
+4-card spread for mid/late-game platinum sinks:
+1. **Guild Logistics** (`Stg 100` — boosts Bastion hourly yield for current run).
+2. **Lair Breaker** (`Stg 100` — adds `+5s/+10s` Boss Timer & cracks Boss Legendary Resistance).
+3. **Survival Conditioning** (`Stg 200` — resists *Rusting, Cold, Heat, Mirages*).
+4. **Weave Overcharge** (`Stg 500` — scales Enchantment, Tattoo & Evolving Item multipliers).
+
+---
+
+## Screen 3: Gear & Forge Tab (`[G]` — *Permanent Core Gear*)
+
+### Top Sub-Tab Strip
+`[ Paper Doll & Loadouts ]` | `[ The Smithy 🔒 Stg 10 ]` | `[ Bag & Filter 🔒 Stg 15 ]` | `[ Glamour 🔒 Stg 25 ]`
+
+### Sub-Tab A: Paper Doll & Loadouts *(Unlocks Stage 1 Beat 8)*
+* **Left Half (Live Sprite & 12 Slots):** Hero preview standing on a stone pedestal framed by **12 Slots** (*Main Hand, Off Hand/Shield, Armour, Helm, Cloak, Gloves, Boots, Belt, Amulet, Ring 1, Ring 2, Trinket*).
+  * At Stage 1 Beat 8, **Helm** glows with `Snikkit's Pie Tin`; empty/unopened slots like **Trinket 2** (`Stg 250`) or **Evolving / Artifact Frame** (`Stg 500/800`) sit visible, greyed out, and padlocked (`🔒`).
+* **Right Half (Stats & Loadouts):**
+  * Crisp card showing selected item's **Dice (`2d6`), Enchant (`+0`), Quality, Rarity colour, Weapon Mastery tag (`Graze`), and `Green ↑ / Red ↓` DPS comparison**.
+  * Bottom strip: **`[Equip Best]`** button + **3 Loadout Pills** (`Loadout 1 Active`, `Loadout 2 🔒 Stg 40`, `Loadout 3 🔒 Stg 250`).
+
+### Sub-Tab B: The Smithy *(Visible & Padlocked at Stage 1 → Opens Stage 10)*
+Displays your equipped item in an anvil frame with **4 Upgrade Axis Rows** stacked cleanly—locked axes show their exact Stage padlock:
+1. **Forge Level (`Unlocks Stg 10`):** `[Gold + Materials] → +X% Power` + 10-pip visual VFX meter (*Sheen → Glow → Particles → Aura*) + Prestige *Masterwork Floor* line.
+2. **Dice Ladder (`🔒 Stg 20`):** `[Materials + Forge Milestone] → Steps Die d6→d8→d10→d12→2d8…` (shows actual miniature dice silhouettes multiplying!).
+3. **Enchantment (`🔒 Stg 36`):** `[Arcane Dust] → +1 / +2 / +3` (`Mythic Runes +4/+5 🔒 Stg 450`).
+4. **Quality Reforge (`🔒 Stg 75`):** `[Materials + Dust] → Crude → Standard → Fine → Masterwork → Heirloom`.
+
+### Sub-Tab C: Inventory, Salvage & Filter *(Visible & Padlocked at Stage 1 → Unlocks Stage 15)*
+* Grid of `40` slots (plus padlocked **Bag of Holding** expansion rows).
+* Right sidebar: **Materials Pouch** (`Fire Beetle Gland, Wolf Pelt, Spider Silk…`), **Arcane Dust** jar, **`[Salvage All Common]`** button, and **Auto-Salvage Rarity Checkboxes (`🔒 Stg 25`)**.
+
+### Sub-Tab D: Glamour (Transmog) & Heraldry *(Visible & Padlocked at Stage 1 → Unlocks Stage 25)*
+* **Wardrobe Locker:** Apply any unlocked item appearance over any slot; pick unlocked **Pixel Dice Skins** (Brass, Gold, Ruby, Chardalyn, Spellfire).
+* **Heraldry Studio:** Shield/Cloak Emblem builder (*Escutcheon shape, Division, Charge symbol, Tinctures*) + **Companion / Mechanical Wonder Cosmetic Slot (`🔒 Stg 430`)**.
+
+---
+
+## Screen 4: Hero, Respec & Guild Roster Tab (`[H]` — *Future-Proofed for All 2024 Options*)
+
+### Top Sub-Tab Strip
+`[ Sheet & Build ]` | `[ Feats & Boons 🔒 Stg 15 ]` | `[ Mirror of Rebuilding 🔒 Stg 50 ]` | `[ Guild Roster 🔒 Stg 100 ]`
+
+### Sub-Tab A: Sheet & Build *(Unlocks Stage 1 Beat 10b / Stage 2)*
+* **Left Column:** Hero portrait, **Name & Epithet selector**, **Background badge**, **Species traits** (*Human: Resourceful, Skillful, Versatile*), **6 Ability Scores** (`STR/DEX/CON/INT/WIS/CHA` with hover tooltips explaining their idle effects), and **Class Level Tracker (`Fighter Lv 1 / 20`)** + **`[Multiclass Slot 🔒 Stg 500]`**.
+* **Right Column:**
+  * **Weapon Mastery Bar (`3 → 6` Slots):** Shows equipped Masteries (`Graze, Sap, Slow`) + padlocked slots `4 (Lv 4)`, `5 (Lv 10)`, `6 (Lv 16)` + **`Tactical Master` swap button (`🔒 Lv 9`)**.
+  * **Class Feature Timeline (`Lv 1 → 20`):** Scrollable horizontal or vertical ribbon showing every upcoming feature—unlocked ones glowing brass, future ones greyed/padlocked with exact level badges (`Lv 2 Action Surge`, `Lv 3 Champion`, `Lv 5 Extra Attack`, `Lv 19 Epic Boon`, `Lv 20 Three Extra Attacks`, `Epic Constellation 🔒 Lv 20+`).
+
+### Sub-Tab B: Feats, Boons & Special Gifts *(Visible & Padlocked at Stage 1 → Unlocks Stage 15)*
+Clean categorized tarot card browser:
+* **Categories (all visible, padlocked until earned):** `Origin Feats` | `Fighting Styles` | `General Feats / ASIs` | `Epic Boons 🔒 Lv 19` | `Dark Gifts 🔒 Ravenloft` | `Arcane/Familiar Feats 🔒 Deadfall`.
+* Clicking any card plays its **5-second `"Try It"` battlefield preview** and shows **Projected DPS**.
+
+### Sub-Tab C: Mirror of Rebuilding *(Full 2024 Respec — Visible & Padlocked at Stage 1 → Tier 1 Stg 50 / Tier 2 Stg 100+)*
+A glowing arcane mirror UI designed specifically so you can drop in all 2024 D&D content cleanly later without touching existing screens:
+* **Step 1 — Stats & Feats (`Unlocks Stage 50`):** Reassign Ability Scores, Background, Origin Feats, and Fighting Styles for Gold or a Respec Token.
+* **Step 2 — Class & Subclass Reincarnation (`🔒 Stage 100 / Hall of Legends`):**
+  * Shows a grid of **13 Class Crests** (*Fighter unlocked; Barbarian, Bard, Cleric, Druid, Monk, Paladin, Ranger, Rogue, Sorcerer, Warlock, Wizard, Artificer* visible & padlocked with unlock conditions).
+  * Selecting any Class expands its **Subclass Drawer** showing every subclass card cleanly tagged by sourcebook (`2024 PHB`, `Heroes of Faerûn`, `Ravenloft: Horrors Within`, `Arcana Unleashed`)—locked ones greyed/padlocked!
+  * Displays the Class’s **Idle Combat Engine preview** (e.g., *Rogue = Advantage Sneak Attack bursts*, *Wizard = Auto-cycling spell slots*).
+* **Step 3 — Species & Lineage (`🔒 Hall of Legends / Campaign Unlocks`):**
+  * Grid of all **10 PHB 2024 Species** (*Human unlocked; Aasimar, Dragonborn, Dwarf, Elf, Gnome, Goliath, Halfling, Orc, Tiefling* padlocked) + **4 Ravenloft Lineages** (*Dhampir, Hexblood, Lupin, Reborn* padlocked to Horror unlocks).
+* **Safety Button — `[Auto-Convert Equipped Gear]`:** Guarantee-checked toggle so swapping Fighter → Wizard converts your Forged/Dice-Laddered Greatsword + Plate into an equivalent Staff + Robe automatically (or puts old gear in the Vault).
+
+### Sub-Tab D: Guild Roster *(Create & Assign Characters — Visible & Padlocked at Stage 1 → Slot 2 at Stg 100)*
+* Displays **8 Hero Portrait Cards** across a wooden guild ledger (`Slot 1: Your Main Hero Active`, `Slot 2 🔒 Stg 100`, `Slots 3–8 🔒 Hall of Legends / Campaigns`).
+* **Create New Hero (`+` on unlocked empty slot):** Opens the full Creator (choose Species, Class, Background, Name, Look, or *"Veteran Recruit"* at 50% of max Hero Level).
+* **Assignment Dropdown on Every Hero Card:**
+  * `[⚔ Lead Freeplay]` *(1 active hero on Battlefield)*
+  * `[🏰 Garrison Bastion]` *(assigned to a Regional Bastion for passive yield)*
+  * `[🗺 Deploy to Campaign]` *(assigned to a finite Campaign Party at the War Table!)*
+
+---
+
+## Screen 5: Tactics & Gambits Tab (`[B]` — *Visible & Padlocked at Stage 1 → Unlocks Stage 17*)
+
+* **Top Toggle:** **`[ Smart Presets ]`** (1-click templates: *Safe Brawler*, *Boss Burster*, *Swarm Sweeper*, *Anti-Rust/Cold*) vs **`[ Custom Gambits ]`**.
+* **Rule Stack (`Slots 1–10`):**
+  * At Stage 17, **Slot 1** opens (`IF Hero HP < 40% → Second Wind`); **Slots 2–10** sit stacked below, each greyed out and padlocked (`🔒 Slot 2: Hall of Legends`, `🔒 Slot 3: Stage 250`, etc.).
+  * Each unlocked row is ultra-simple: `[▲▼ Priority]` | **`IF`** `[Condition Card]` | **`→ THEN`** `[Action Card]` | `[ON/OFF]`.
+* **Bottom Tray — Collectible Card Codex:** Shows all discovered vs padlocked **Condition Cards** & **Action Cards** with clear hints on which Boss or Bounty drops them.
+
+---
+
+## Screen 6: World, Town & Meta Tab (`[W]` — *Visible & Padlocked at Stage 1 → Unlocks Stage 25*)
+
+### Top Sub-Tab Strip
+`[ Faerûn Atlas ]` | `[ Town & Bastions ]` | `[ Hall of Legends 🔒 Stg 50 ]` | `[ Factions & Catalog 🔒 Stg 26 ]` | `[ Bestiary & Records 🔒 Stg 19 ]`
+
+### Sub-Tab A: Faerûn Atlas & Stage Selector
+* Illustrated pixel map showing **Regions 0–10 (`Stages 1–1,000`)**. Locked regions lie shrouded in parchment mist with **`🔒 Region Banner + Unlock Stage`**.
+* Clicking any unlocked Region shows its 4 Zones, 5-Stage Boss checkboxes (`✓`), **Biome Hazards**, and a **`[Farm Here]`** pin.
+* At Stage 1,000, a glowing astral circle marks the sealed **`Planar Gate 🔒 (Beyond Stage 1,000)`**.
+
+### Sub-Tab B: Shadowdale Hub & Regional Bastions
+* **Left Selector Strip:** **Shadowdale (`Stg 25`)** + **10 Regional Bastion Pins** (*Freedale 🔒 Stg 65*, *Upper City Manor 🔒 Stg 165*, *Wandering Isle 🔒 Stg 238*, *The Terror 🔒 Stg 335*, *Dallabad Oasis 🔒 Stg 425*, plus Regions 6–10).
+* **Inside a Bastion View:**
+  * Visual pixel cross-section showing **5 Facility Slots** (Smithy, Garden, Study, Barrack, + **Faction Special Facility Slot**), **Hireling Portraits** (*Orebreaker, Starlights, Flywheel*), **Assigned Guild Roster Hero** slot (`[+ Assign Hero]`), **Bastion Turn Timer** (collecting passive Gold/Materials/Dust), and **Bastion Event Log**.
+  * Shadowdale specifically includes **Elminster’s Locked Tower** (showing his 1501 DR note + archive of all *"While You Were Away"* letters!).
+
+### Sub-Tab C: Hall of Legends *(Prestige Screen — Visible & Padlocked at Stage 1 → Unlocks Stage 50)*
+* **Header Banner:** *"Old Skull Inn — Bard's Tale"* showing **Current Stage**, **Renown Earned on Reset (`+X Renown`)**, and a clear **"What Resets vs What You Keep"** checklist before clicking **`[RETELL THE LEGEND]`**.
+* **4 Color-Coded Upgrade Trees:**
+  1. **Might (Red):** `% Damage`, `% HP`, Base Crit Multiplier, Boss Timer & Lair Breaker.
+  2. **Fortune (Gold):** `% Gold`, `% XP`, `% Materials/Dust`, Offline Cap (`8h → 72h`).
+  3. **Swiftness (Blue):** Starting Stage Skips (`11 → 26 → 51 → 101 → 151…`), `3× / 4× Speed`, Faster Transitions, **Masterwork Forge Floor**.
+  4. **Heroes (Purple):** Extra Gambit/Loadout/Trinket/Roster Slots, *Veteran Recruitment*, and **Full 2024 Respec / Multiclass Unlocks**.
+
+### Sub-Tab D: Factions & Aurora's Whole Realms Catalog
+* **Top Half — 8 Faction Banners:** *Harpers, Zhentarim, Emerald Enclave, Lords' Alliance, Order of the Gauntlet, Purple Dragon Knights, Red Wizards, Cult of the Dragon*. Each has a `0–50` Renown bar showing **Special Bastion Facility**, **Harper Persona**, or **Thayan Spell Tattoo** unlocks (all padlocked until earned).
+* **Bottom Half — Aurora’s Catalog Counter:** Regional survival gear (*Warm Fungal Clothing, Desert Clothing, Bright Fungal Cloak*), **Daily Cheese Bag (`1 gp`)**, and **Mechanical Wonders (`🔒 Stg 430`)**.
+
+### Sub-Tab E: Bestiary, Trinkets & Legend Sheet
+* **Elminster’s Monster Manual:** Creature cards (`Silhouette → Sprite → Tier I–V Kill Multipliers + Elminster Margin Notes`).
+* **Trinket Shelf & Achievements/Titles** + **"Your Legend So Far"** Shareable D&D Sheet.
+
+---
+
+## Screen 7: The War Table — Set-Length Campaigns (`[C]` — *Visible & Padlocked at Stage 1 → Unlocks Stage 100*)
+
+A dedicated map-table modal built specifically so you can drop finite, story-driven modules alongside Freeplay without clashing with `10³¹` exponential scaling:
+
+### Campaign Selection Cards (All Visible & Padlocked at Stage 1)
+1. **The Black Network (`🔒 Unlocks Stage 100 · Levels 1–10`)** — Shadowdale → Voonlar → Zhentil Keep.
+2. **Ravenloft: The Horrors Within (`🔒 Unlocks Stage 250 / Roster ≥ 2 · Domains of Dread`)** — Choose from Domains (*Barovia, Lamordia, Cosmic Horror, etc.*).
+3. **Arcana Unleashed: Deadfall (`🔒 Unlocks Stage 500 · Levels 11–20`)** — Covert espionage in Thay vs Szass Tam.
+4. **Reserved Future Campaign Slots (`🔒 Coming Soon`)** — Extra brass placard slots for future books.
+
+### Inside an Active Campaign Run (Clean 3-Panel Layout)
+* **Top Bar — Rules & Mode Banner:** Clearly tells the player: **`"BOUNDED TABLETOP RULES: Training & Prestige Multipliers Paused — Pure Hero Level, Gear & Strategy!"`** + Difficulty selector (*Story / Adventurer / Heroic / Nightmare*) + **Play Mode (`[Tactical Turn Control]` vs `[Smart Gambits Auto]`)**.
+* **Left Panel — Party Formation (`1–4 Roster Slots`):** Drag up to 4 characters from your **Guild Roster** (or borrow Story Allies like *Alias* / *Karlach* while your roster is small). Shows shared Short/Long Rest resources (*Action Surge, Second Wind, Spell Slots, Hit Dice*).
+* **Center Panel — Branching Node Map (`10–30 Finite Nodes`):** Node icons for **Combat Encounters, Skill Puzzles, Campfire Rests, Moral Choices, Traps, and Darklord / Finale Bosses**.
+* **Right Panel — Campaign-Specific Subsystem Slot (Modular Box):** Swaps cleanly depending on the selected module:
+  * *For Ravenloft: The Horrors Within:* Displays **Dread & Fear Meter**, **3 Active Tarokka Modifier Cards**, and **Dark Gift Bargain** prompts (power + curse tradeoffs).
+  * *For Arcana Unleashed: Deadfall:* Displays **Secrecy / Alertness Meter** (stealth vs loud alerts), **3-Way Arcane Society Intrigue Bars**, and **Evolving Magic Item Milestone Tracker**.
+* **Bottom Reward Footer:** Shows the **Permanent Freeplay Unlocks** earned upon completion (e.g., *"+100% Freeplay Damage, Dhampir Lineage Unlocked, Evolving Relic Claimed"*).
+
+---
+
+# Summary of Why This UI Scales Cleanly From Stage 1 to Stage 1,000
+* **Stage 1 feels effortless:** Players look at one clear battlefield, 1 unlocked tab (`Train`), 1 clickable button (`Weapon Drills R1 · 10 cp`), and 1 exciting goal (`>> Action Surge [2]`).
+* **Nothing surprises or hides:** Every padlocked button, tab, drill, upgrade axis, class crest, and campaign card acts as a visible curiosity hook (*"Ooh, what are Gambits at Stage 17? What's Ravenloft at Stage 250?"*).
+* **Zero UI redesign needed later:** Adding all 12+1 2024 classes, 48+ subclasses, 14 species/lineages, and full set-length campaigns simply means **snapping off the padlocks** inside pre-built, already-framed screens!
