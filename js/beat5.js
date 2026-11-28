@@ -23,12 +23,12 @@ import { DIALOGUE, lineEnd } from './timeline.js';
 import { F, off } from './world.js';
 import * as cb from './combat.js';
 import * as beat4 from './beat4.js';
-import { mulberry, clamp, easeOut, easeOutBack } from './util.js';
+import { mulberry, clamp, lerp, easeOut, easeOutBack } from './util.js';
 import { num, numWidth } from './pixfont.js';
 import { HUD, boxBottom } from './ui.js';
 
 const DT = 1 / 120;
-const FUSE = 6.5;                     // goblin copper is impatient
+const FUSE = 8;                       // coins stay on the ground for 8s in Stage 1
 let D = null;
 
 export function buildBeat5() {}       // all art is built in combat.buildCombat
@@ -63,21 +63,24 @@ function busyLine(s) {
 }
 const aliveNow = s => D.gobs.filter(g => g.dieAt === undefined && s >= g.landT);
 
-// ---------- the setup: three of them, over the wall ----------
+// ---------- the setup: split 1 + 2 waves over the dry-stone wall ----------
+function spawnGoblin(d, i) {
+  const g = cb.addGoblin({ ...d, leap: d.tel + 0.55, b5: i, holdCoins: true, wary: true });
+  g.slot = d.slot ?? i;
+  const arrive = cb.SLOT[Math.min(g.slot, 1)] + (g.slot >= 2 ? 36 : 0);
+  g.arriveX = arrive;
+  const midX = Math.round(lerp(g.landX, arrive, 0.48));
+  cb.moveRat(g, g.landT + 0.05, midX, { dur: 0.75 });
+  g.throwAt = g.landT + 0.82;
+  g.meleeAt = cb.moveRat(g, g.landT + 1.05, arrive, { dur: 0.80 });
+  return g;
+}
+
 function startBeat(s) {
   D.startAt = s;
-  const defs = [
-    { tel: s + 0.60, wallX: 430, landX: 422, coins: 5, depth: 2 },
-    { tel: s + 2.00, wallX: 502, landX: 494, coins: 6, depth: -2 },
-    { tel: s + 3.40, wallX: 556, landX: 548, coins: 4, depth: 3 },
+  D.gobs = [
+    spawnGoblin({ tel: s + 0.60, wallX: 430, landX: 422, coins: 5, depth: 2, slot: 0 }, 0),
   ];
-  D.gobs = defs.map((d, i) => {
-    const g = cb.addGoblin({ ...d, leap: d.tel + 0.55, b5: i, holdCoins: true, wary: true });
-    g.slot = i;
-    const arrive = cb.SLOT[Math.min(i, 1)] + (i === 2 ? 36 : 0);
-    g.meleeAt = cb.moveRat(g, g.landT + 0.15, arrive, { speed: 185 });
-    return g;
-  });
 }
 
 // ---------- the director ----------
@@ -99,24 +102,33 @@ export function step(t) {
 
 function tick(s) {
   if (!D.line10 && s >= D.startAt + 0.85) { D.line10 = true; say('line10', s); }
-  // the hero's round begins once the first goblin has both feet in the meadow
-  if (!D.round && !D.doneAt && D.gobs.some(g => s >= g.landT)) startRound(s, s + 0.85);
+  // Wave 5 (2 Goblins) vaults the wall once Wave 4's lone Goblin Minion falls
+  if (D.gobs.length === 1 && D.gobs[0].popAt !== undefined && s >= D.gobs[0].popAt + 0.35) {
+    D.gobs.push(
+      spawnGoblin({ tel: s + 0.35, wallX: 502, landX: 494, coins: 6, depth: -2, slot: 0 }, 1),
+      spawnGoblin({ tel: s + 1.15, wallX: 556, landX: 548, coins: 4, depth: 3, slot: 1 }, 2),
+    );
+  }
+  // Round Clock ticks ONLY while an alive goblin is within melee reach
+  const inReach = aliveNow(s).some(g => g.meleeAt <= s + 0.05);
+  if (!D.round && !D.doneAt && inReach) startRound(s, s + cb.RULES.round * (cb.E.roundMult || 1));
+  if (D.round && !D.round.sw && !inReach) { D.round.t0 += DT; D.round.full += DT; D.round.at += DT; }
   heroTurn(s);
   gobTurns(s);
-  // goblin copper gets its own short fuse as it lands (Beat 3's countdown is long spent)
+  // goblin copper gets its 8s fuse as it lands
   for (const c of cb.E.coins) {
     if (!c.gob || !c.hold || c.armed || c.fly !== undefined || c.roll !== undefined) continue;
     if (s >= c.land) { c.armed = true; c.expire = c.land + FUSE + c.j * 0.4; }
   }
   // the proud line, once the star has sung and Elminster has a gap between words
   if (!D.line11 && D.critAt !== null && s >= D.critAt + 1.7 && !busyLine(s)) { D.line11 = true; say('line11', s); }
-  if (!D.doneAt && D.gobs.length && D.gobs.every(g => g.popAt !== undefined && s >= g.popAt)) D.doneAt = s;
+  if (!D.doneAt && D.gobs.length >= 3 && D.gobs.every(g => g.popAt !== undefined && s >= g.popAt)) D.doneAt = s;
 }
 
 function startRound(t0, at) { D.round = { t0, full: at, at }; cb.E.rounds.push(D.round); }
 
 // the hero's turn: roll 0.62 s ahead (so the die can tumble), pick the target 0.3 s ahead —
-// unless the fated one is in the blade's path, in which case the die has already chosen
+// unless the fated one (2nd goblin) is in the blade's path, in which case the die has already chosen
 function heroTurn(s) {
   const rd = D.round; if (!rd) return;
   if (!rd.sw && s >= rd.at - 0.62) {
@@ -128,11 +140,10 @@ function heroTurn(s) {
       return;
     }
     const guess = cb.chooseTarget(s, rd.at);
-    const fated = D.gobs[1];                                   // the second one the hero will meet
-    const fatedDead = fated.dieAt !== undefined;
-    const fatedOk = !fatedDead && fated.meleeAt <= rd.at + 0.02;               // in the blade's path?
-    // the crit waits for him — unless the player's taps got him first, in which case fate picks another
-    const isCrit = !D.critDone && guess >= 0 && ((fatedOk && guess === fated.id) || (fatedDead && cb.E.rats[guess].gob));
+    const fated = D.gobs[1];                                   // the 2nd goblin (first of Wave 5)
+    const fatedDead = fated ? fated.dieAt !== undefined : false;
+    const fatedOk = !!fated && !fatedDead && fated.meleeAt <= rd.at + 0.02;
+    const isCrit = !D.critDone && guess >= 0 && D.gobs.length >= 2 && ((fatedOk && guess === fated.id) || (fatedDead && cb.E.rats[guess].gob));
     const roll = isCrit ? 20 : 1 + Math.floor(D.rng() * 20);
     const dice = isCrit ? [6, 5, 6, 5] : Array.from({ length: roll >= (cb.E.critRange || 20) ? 4 : 2 }, () => 1 + Math.floor(D.rng() * 6));
     rd.sw = cb.addSwing({ at: rd.at, rat: -1, roll, dice, live: true, ...(isCrit ? { launch: true, linger: 1.7 } : {}) });
@@ -154,21 +165,38 @@ function heroTurn(s) {
         cb.damageRat(tgt, sw.at, sw.dmg, { kind: 'swing', sw, launch: sw.launch && tgt && !!tgt.gob });
       }
     }
-    const left = aliveNow(s).filter(r => isFinite(r.meleeAt));
+    const leftInReach = aliveNow(s).some(r => r.meleeAt <= s + 0.05);
     D.round = null;
-    if (left.length) startRound(sw.at, sw.at + cb.RULES.round * (cb.E.roundMult || 1));
+    if (leftInReach) startRound(sw.at, sw.at + cb.RULES.round * (cb.E.roundMult || 1));
   }
 }
 
-// each goblin in the line stabs on its own, slower clock; the line shuffles up as the front falls
+// each goblin throws 1 dagger mid-range, then stabs on its 3.2s clock in melee
 function gobTurns(s) {
+  for (const g of D.gobs) {
+    if (g.dieAt !== undefined || g.thrown || g.throwAt === undefined) continue;
+    if (s >= g.throwAt - 0.18) {
+      g.thrown = true;
+      const midX = Math.round(lerp(g.landX, g.arriveX, 0.48));
+      cb.addThrownDagger({
+        fromAt: g.throwAt,
+        at: g.throwAt + 0.42,
+        rat: g.id,
+        fromX: midX - 8,
+        toX: cb.HERO_FIGHT_CX + 4,
+        depth: g.depth,
+        roll: 1 + Math.floor(D.rng() * 20),
+        dmg: 2,
+      });
+    }
+  }
   const live = aliveNow(s);
   for (const g of live) {
-    if (!(g.meleeAt <= s + 0.3) || g.slot > 1) continue;               // the third one waits his turn, hopping
+    if (!(g.meleeAt <= s + 0.3) || g.slot > 1) continue;               // the back marker waits his turn
     if (g.nextBite === undefined) g.nextBite = g.meleeAt + 0.7 + D.rng() * 0.5;
     if (s >= g.nextBite - 0.3) {
       const at = g.nextBite;
-      cb.addBite({ at, rat: g.id, roll: 1 + Math.floor(D.rng() * 20), dmg: 1 + Math.floor(D.rng() * 4) });
+      cb.addBite({ at, rat: g.id, roll: 1 + Math.floor(D.rng() * 20), dmg: 2 });
       g.nextBite = at + cb.RULES.gobRound + D.rng() * 0.4 - 0.15;
     }
   }

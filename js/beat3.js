@@ -42,9 +42,9 @@ export function reset() {
 }
 reset();
 
-const held = () => (cb.E ? cb.E.coins.filter(c => c.hold) : []);
-// goblin copper (Beat 5) is tappable but must not re-trigger Beat 3's tutorial nudges and prompts
-const resting = (s, gobsToo = false) => held().filter(c => (gobsToo || !c.gob) && c.fly === undefined && c.roll === undefined && s >= c.land + 0.16);
+const held = () => (cb.E ? cb.E.coins.filter(c => c.hold && !c.archived) : []);
+// goblin & Stage 2 copper is tappable but must not re-trigger Beat 3's tutorial nudges and prompts
+const resting = (s, gobsToo = false) => held().filter(c => (gobsToo || (!c.gob && !c.s2)) && c.fly === undefined && c.roll === undefined && s >= c.land + 0.16);
 const resolved = c => c.arrive !== undefined || c.gone !== undefined;
 
 export function wantsCoins(t) { return !!D && resting(cb.warp(t), true).length > 0; }
@@ -73,6 +73,21 @@ export function click(gx, gy, t) {
   return true;
 }
 
+// hovering a coin in Stage 1 also picks it up with rising musical clinks
+export function hover(gx, gy, t) {
+  if (gx === null || !D || !cb.E || (cb.E.stage || 1) >= 2) return false;
+  const s = cb.warp(t), og = off(1, F.ground);
+  const c = cb.coinAtPoint(gx, gy, s, og);
+  if (!c) return false;
+  const [cx, cy] = cb.coinPosAt(c, s, og);
+  D.collected += cb.collectCoinSplash(c, s, og, 24);
+  collectLootNear(cx, cy, s, 44);
+  if (D.firstTap === null) D.firstTap = s;
+  D.ripples.push({ t, gx, gy, hit: true, splash: false });
+  if (D.ripples.length > 24) D.ripples.shift();
+  return true;
+}
+
 function busyLine(s) {
   for (const d of Object.values(DIALOGUE)) if (d.hud && isFinite(d.at) && s >= d.at && s < lineEnd(d) + 0.3) return true;
   return false;
@@ -80,7 +95,7 @@ function busyLine(s) {
 function say(key, s) { DIALOGUE[key].at = s; cb.E.live.push({ s: Math.max(0, s - 0.05), k: 'paper' }); }
 
 export function step(t) {
-  if (!D || !cb.E) return;
+  if (!D || !cb.E || (cb.E.stage || 1) >= 2) return;
   const s = cb.warp(t);
   // scrubbed backwards (or reset): put any held coins back on the ground and start the beat over
   if (D.lastS !== null && s < D.lastS - 0.25) {
@@ -127,14 +142,15 @@ export function step(t) {
       if (D.firstTap === null) D.firstTap = s;
       continue;
     }
-    // Beat 3 arms the countdown only for the coins already on the ground when the fight ended;
-    // goblin copper (Beat 5) gets its own shorter fuse, armed by beat5.js as it lands
-    if (!c.armed) { if (D.armedAt !== null && c.land <= D.armedAt + 0.01) { c.armed = true; c.expire = D.armedAt + 5 + c.j * 0.45; } }
-    else if (s >= c.expire) { cb.loseCoin(c, s); D.lost++; }
+    // Beat 3 arms the countdown only for Beat 2's coins already on the ground when the fight ended;
+    // goblin copper (Beat 5) and Stage 2+ copper get their own fuses
+    if (!c.armed && !c.gob && !c.s2) { if (D.armedAt !== null && c.land <= D.armedAt + 0.01) { c.armed = true; c.expire = D.armedAt + 8 + c.j * 0.45; } }
+    else if (c.armed && !c.s2 && s >= c.expire) { cb.loseCoin(c, s); D.lost++; }
   }
-  D.collected = Math.max(D.collected, hc.filter(c => c.fly !== undefined).length);
+  D.collected = Math.max(D.collected, hc.filter(c => !c.s2 && c.fly !== undefined).length);
   // the closing line once every coin is pocketed or gone (and the fight has produced all its coins)
-  if (D.doneAt === null && hc.length && hc.every(resolved) && !busyLine(s)) {
+  const s1Held = hc.filter(c => !c.s2);
+  if (D.doneAt === null && s1Held.length && s1Held.every(resolved) && !busyLine(s)) {
     say(D.lost === 0 ? 'line8a' : 'line8b', s + 0.35);
     D.doneAt = s + 0.35;
   }
@@ -181,7 +197,7 @@ function drawRipples(ctx, t) {
 // ---------- overlays ----------
 // a soft spotlight on the nearest resting coin until the player gets the idea
 export function drawSpot(ctx, p, t) {
-  if (!D || D.introAt === null || D.firstTap !== null) return;
+  if (!D || (cb.E?.stage || 1) >= 2 || D.introAt === null || D.firstTap !== null) return;
   const s = cb.warp(t);
   const rs = resting(s); if (!rs.length) return;
   const [x, y] = cb.coinPosAt(rs[0], s, off(p, F.ground));
@@ -194,6 +210,7 @@ export function drawSpot(ctx, p, t) {
 export function drawOverlay(ctx, uctx, p, t) {
   if (!D) return;
   drawRipples(ctx, t);
+  if ((cb.E?.stage || 1) >= 2) return;
   const s = cb.warp(t);
   drawBanner(ctx, s);
   if (D.introAt === null) return;

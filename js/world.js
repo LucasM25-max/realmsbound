@@ -8,6 +8,8 @@
 import { W, H, PAN } from './timeline.js';
 import { buildSkull, buildHills, drawMillSails, SKULL_Y, HILLS_Y } from './art/landscape.js';
 import { buildVillage, drawInnSign, VILLAGE_Y, WINDOWS } from './art/village.js';
+import { buildFarHillsS2, drawMillSailsS2, buildFarmhouseS2, buildHedrunFrames, buildNearS2, buildGroundS2, HEDRUN_POS, WINDOWS_S2 } from './art/turnips.js';
+import { buildFarOrchardS3, buildCiderBarnS3, buildNearS3, buildGroundS3, buildHedrunGiftSprite, HEDRUN_BARN_POS, WINDOWS_S3 } from './art/ciderbarn.js';
 import { windowGlows, sunPool, cloudShadows } from './fx.js';
 import { buildNear, buildMeadow, buildScarecrow, NEAR_Y as NY, GROUND_Y as GY, SCARECROW as SC, SC_W, SC_BASE } from './art/meadow.js';
 import { makeCanvas, hash, mulberry, fbm1, noise2, bayer, hex, rgb, mix, lerp, clamp, inv, pxEllipse } from './util.js';
@@ -53,13 +55,76 @@ function buildSky() {
   L.stars = Array.from({ length: 170 }, () => ({ x: Math.floor(r() * W), y: Math.floor(Math.pow(r(), 1.6) * 250), b: r(), ph: r() * 6.28, sp: 1 + r() * 3 }));
 }
 
+const SKY_S2_STOPS = [
+  [0, '#2864b4'], [75, '#4b91d9'], [155, '#82c2f0'], [235, '#bae3fa'], [310, '#d8eef8'], [SKY_H, '#f0f5e8'],
+].map(([y, c]) => [y, hex(c)]);
+
+function skyS2ColorAt(y) {
+  for (let i = 0; i < SKY_S2_STOPS.length - 1; i++) {
+    const [y0, c0] = SKY_S2_STOPS[i], [y1, c1] = SKY_S2_STOPS[i + 1];
+    if (y >= y0 && y <= y1) return [c0, c1, (y - y0) / (y1 - y0)];
+  }
+  return [SKY_S2_STOPS.at(-1)[1], SKY_S2_STOPS.at(-1)[1], 0];
+}
+
+function buildSkyS2() {
+  const [c, x] = makeCanvas(W, SKY_H);
+  const id = x.createImageData(W, SKY_H); const d = id.data;
+  const sunSkyY = 88 + Math.round(PAN * F.sky);
+  for (let y = 0; y < SKY_H; y++) {
+    const [c0, c1, tt] = skyS2ColorAt(y);
+    for (let xx = 0; xx < W; xx++) {
+      const warm = clamp(1 - Math.hypot((xx - 468) / 340, (y - sunSkyY) / 140)) * 0.16;
+      const q = tt * 3, base = Math.floor(q), fr = q - base;
+      const step = (base + (fr > bayer(xx, y) ? 1 : 0)) / 3;
+      let col = mix(c0, c1, clamp(step));
+      col = mix(col, [255, 246, 212], warm);
+      const i = (y * W + xx) * 4; d[i] = col[0]; d[i + 1] = col[1]; d[i + 2] = col[2]; d[i + 3] = 255;
+    }
+  }
+  x.putImageData(id, 0, 0);
+  L.sky2 = c;
+}
+
+const SKY_S3_STOPS = [
+  [0, '#1e58aa'], [70, '#3e84d2'], [148, '#72b6ec'], [228, '#addcf8'], [304, '#d8eefc'], [SKY_H, '#f5f6e6'],
+].map(([y, c]) => [y, hex(c)]);
+
+function skyS3ColorAt(y) {
+  for (let i = 0; i < SKY_S3_STOPS.length - 1; i++) {
+    const [y0, c0] = SKY_S3_STOPS[i], [y1, c1] = SKY_S3_STOPS[i + 1];
+    if (y >= y0 && y <= y1) return [c0, c1, (y - y0) / (y1 - y0)];
+  }
+  return [SKY_S3_STOPS.at(-1)[1], SKY_S3_STOPS.at(-1)[1], 0];
+}
+
+function buildSkyS3() {
+  const [c, x] = makeCanvas(W, SKY_H);
+  const id = x.createImageData(W, SKY_H); const d = id.data;
+  const sunSkyY = 56 + Math.round(PAN * F.sky);
+  for (let y = 0; y < SKY_H; y++) {
+    const [c0, c1, tt] = skyS3ColorAt(y);
+    for (let xx = 0; xx < W; xx++) {
+      const warm = clamp(1 - Math.hypot((xx - 488) / 360, (y - sunSkyY) / 145)) * 0.24;
+      const q = tt * 3, base = Math.floor(q), fr = q - base;
+      const step = (base + (fr > bayer(xx, y) ? 1 : 0)) / 3;
+      let col = mix(c0, c1, clamp(step));
+      col = mix(col, [255, 248, 214], warm);
+      const i = (y * W + xx) * 4; d[i] = col[0]; d[i + 1] = col[1]; d[i + 2] = col[2]; d[i + 3] = 255;
+    }
+  }
+  x.putImageData(id, 0, 0);
+  L.sky3 = c;
+}
+
 // ---------- CLOUDS ----------
 // Volumetric cumulus: a union of spherical puffs gives a height field; each pixel is lit from
 // the low dawn sun (which sits BELOW most clouds, so undersides glow gold and the tops fall
 // into lavender shade), then quantised to a 7-step ramp with ordered dithering.
 const smooth01 = v => { v = clamp(v); return v * v * (3 - 2 * v); };
 const CLOUD_RAMP = ['#5f4a84', '#7d5f97', '#9c74a6', '#c58eb0', '#e9a2ae', '#ffbfa4', '#ffdcb4', '#fff3dc'].map(hex);
-function buildCloud(seed, w, h, sx) {
+const CLOUD_RAMP_S2 = ['#6585b2', '#7e9ec9', '#9cb9df', '#bdd5ee', '#dcebf9', '#f0f7fe', '#fffdf4', '#ffffff'].map(hex);
+function buildCloud(seed, w, h, sx, ramp = CLOUD_RAMP, daytime = false) {
   const r = mulberry(seed);
   const [c, x] = makeCanvas(w, h);
   // puffs: a row of big belly puffs, then smaller cauliflower puffs stacked on the crown
@@ -91,16 +156,19 @@ function buildCloud(seed, w, h, sx) {
     }
     if (!hit) continue;
     const nz = Math.sqrt(Math.max(0, 1 - hu * hu - hv * hv));
-    // two lights: cool sky light from above, warm low sun from below/side
-    let t = 0.47 - hv * 0.3 + hu * L[0] * 0.22 + (nz > 0.25 ? 0 : 0.06) + smooth01((y - base + 6) / 6) * 0.35;
-    if (y >= base) t = 0.86;                           // gold underside lip
+    // two lights: Stage 1 dawn sun from below/side; Stage 2 bright mid-morning sun from above/right
+    let t = daytime
+      ? 0.44 - hv * 0.34 + hu * lx * 0.24 + (nz > 0.3 ? 0.05 : -0.04) - smooth01((y - base + 6) / 6) * 0.28
+      : 0.47 - hv * 0.3 + hu * L[0] * 0.22 + (nz > 0.25 ? 0 : 0.06) + smooth01((y - base + 6) / 6) * 0.35;
+    if (!daytime && y >= base) t = 0.86;                // gold underside lip at dawn
+    if (daytime && y >= base) t = Math.min(t, 0.24);    // cool sky-blue flat cloud belly in daylight
     // contact shadow where this puff tucks under the one behind/above it
-    for (const p of puffs) { if (p === hit) break; const u = (xx + 0.5 - p.x) / p.r, v = (y + 0.5 - p.y) / (p.r * (p.sq || 0.8)); if (u * u + v * v <= 1.0 && hv < -0.55 && !hit.sq) { t -= 0.12; break; } }
+    for (const p of puffs) { if (p === hit) break; const u = (xx + 0.5 - p.x) / p.r, v = (y + 0.5 - p.y) / (p.r * (p.sq || 0.8)); if (u * u + v * v <= 1.0 && hv < -0.55 && !hit.sq) { t -= 0.14; break; } }
     t = clamp(t);
     let k = t * 7; const fr = k - Math.floor(k); k = Math.floor(k);
     if (fr > 0.82 && ((xx + y) & 1)) k++;              // tight checker only on band edges
-    const col = CLOUD_RAMP[Math.min(7, k + 1)];
-    const i = (y * w + xx) * 4; d[i] = col[0]; d[i + 1] = col[1]; d[i + 2] = col[2]; d[i + 3] = 255; d[i + 3] = 254 - Math.min(7, k + 1);
+    const col = ramp[Math.min(7, k + (daytime ? 0 : 1))];
+    const i = (y * w + xx) * 4; d[i] = col[0]; d[i + 1] = col[1]; d[i + 2] = col[2]; d[i + 3] = 255; d[i + 3] = 254 - Math.min(7, k + (daytime ? 0 : 1));
   }
   // silver lining: the top edge of every puff catches the brightening sky, the sun-side edge glows
   const A = (xx, y) => (xx < 0 || y < 0 || xx >= w || y >= h) ? 0 : d[(y * w + xx) * 4 + 3];
@@ -110,19 +178,18 @@ function buildCloud(seed, w, h, sx) {
     if (!A(xx, y - 1)) k = Math.max(k + 2, 5);
     else if (!A(xx, y - 2)) k = Math.max(k + 1, 4);
     if ((lx > 0.1 && !A(xx + 1, y)) || (lx < -0.1 && !A(xx - 1, y))) k += 1;
-    const col = CLOUD_RAMP[Math.min(7, k)];
+    const col = ramp[Math.min(7, k)];
     d[i] = col[0]; d[i + 1] = col[1]; d[i + 2] = col[2];
   }
   for (let i = 3; i < d.length; i += 4) if (d[i]) d[i] = 255;
   x.putImageData(id, 0, 0);
   return c;
 }
-// thin stratus streaks lying along the horizon glow
-function buildStreak(seed, w, h) {
-  const r = mulberry(seed);
+// thin stratus streaks lying along the horizon
+function buildStreak(seed, w, h, daytime = false) {
   const [c, x] = makeCanvas(w, h);
   const id = x.createImageData(w, h); const d = id.data;
-  const A = hex('#c88aa8'), B = hex('#f6b9a4'), Cc = hex('#ffe4c0');
+  const A = hex(daytime ? '#aacae8' : '#c88aa8'), B = hex(daytime ? '#d8ecfb' : '#f6b9a4'), Cc = hex(daytime ? '#ffffff' : '#ffe4c0');
   for (let xx = 0; xx < w; xx++) {
     const f = xx / w, env = Math.sin(Math.PI * f) ** 0.6;
     const top = h / 2 - env * (h / 2 - 1) * (0.6 + 0.4 * noise2(xx / 14, seed, 3)), bot = h / 2 + env * (h / 2 - 1) * 0.55;
@@ -183,6 +250,85 @@ function buildRange() {
   L.range = c;
 }
 
+function buildRangeS2() {
+  const [c, x] = makeCanvas(W, 150);
+  const A = hex('#6e90b8'), B = hex('#c2dcf0'), SH = hex('#4f7098'), RIM = hex('#f2f9ff');
+  const A2 = hex('#587ca2'), B2 = hex('#9ec0da'), SH2 = hex('#405e82'), RIM2 = hex('#d9ecf8');
+  const SKY_HAZE = hex('#cce4f4');
+  const crag1 = xx => Math.abs(((xx * 0.13 + fbm1(xx / 28, 7, 3) * 4) % 10) - 5) * 1.1;
+  const r1 = xx => 26 + fbm1(xx / 68, 15, 5) * 38 - crag1(xx) - Math.max(0, 14 - Math.abs(xx - 458) / 14);
+  const r2 = xx => 56 + fbm1(xx / 44, 21, 4) * 28 - Math.abs(((xx * 0.19) % 6) - 3) * 0.85;
+  for (let xx = 0; xx < W; xx++) {
+    const t1 = Math.round(r1(xx)), s1 = clamp((r1(xx + 4) - r1(xx - 4)) * 0.16, -1, 1);
+    const sunProx = clamp(1 - Math.abs(xx - 468) / 260) * 0.18;
+    const facet1 = noise2(xx / 18, 4, 17) > 0.54 ? 0.12 : -0.10;
+    const base1 = s1 < 0 ? mix(A, RIM, clamp(-s1 * 0.28 + sunProx, 0, 0.40)) : mix(A, SH, clamp(s1 * 0.42 - facet1 * 0.3, 0, 0.52));
+    for (let y = t1; y < 150; y++) {
+      const t = clamp((y - t1) / 52);
+      const gully = Math.sin((xx - y * 0.72) * 0.11 + fbm1(xx / 22, 9, 2) * 2.5);
+      let col = mix(base1, B, t * 0.82 + (gully > 0.42 && y - t1 > 4 ? -0.10 : 0) + (bayer(xx, y) - 0.5) * 0.18);
+      if (y > 96) col = mix(col, SKY_HAZE, clamp((y - 96) / 54) * 0.45);
+      if (y - t1 < 2) col = mix(A, RIM, clamp(0.62 - s1 * 0.34 + sunProx, 0.24, 0.96));
+      x.fillStyle = rgb(col); x.fillRect(xx, y, 1, 1);
+    }
+    const t2 = Math.round(r2(xx)), s2 = clamp((r2(xx + 4) - r2(xx - 4)) * 0.16, -1, 1);
+    const base2 = s2 < 0 ? mix(A2, RIM2, clamp(-s2 * 0.26 + sunProx, 0, 0.38)) : mix(A2, SH2, clamp(s2 * 0.40, 0, 0.50));
+    for (let y = t2; y < 150; y++) {
+      const t = clamp((y - t2) / 44);
+      const rib = ((xx - Math.floor(y * 0.55)) % 19 === 0) ? -0.09 : 0;
+      let col = mix(base2, B2, t * 0.85 + rib + (bayer(xx, y) - 0.5) * 0.22);
+      if (y > 106) col = mix(col, SKY_HAZE, clamp((y - 106) / 44) * 0.38);
+      if (y - t2 < 1) col = mix(A2, RIM2, clamp(0.54 - s2 * 0.32 + sunProx, 0.2, 0.90));
+      x.fillStyle = rgb(col); x.fillRect(xx, y, 1, 1);
+    }
+    if (hash(xx, 93) > 0.85) {
+      const ph = 3 + Math.floor(hash(xx, 94) * 4);
+      x.fillStyle = rgb(mix(A2, [34, 58, 66], 0.42));
+      for (let k = 0; k < ph; k++) x.fillRect(xx - Math.floor(k / 3), t2 - ph + k, 1 + Math.floor(k / 3) * 2, 1);
+    }
+  }
+  L.range2 = c;
+}
+
+function buildRangeS3() {
+  const [c, x] = makeCanvas(W, 150);
+  const A = hex('#6e95b9'), B = hex('#c4e0f4'), SH = hex('#4e759c'), RIM = hex('#f4faff');
+  const A2 = hex('#59839e'), B2 = hex('#a4c8de'), SH2 = hex('#426680'), RIM2 = hex('#e2f2fc');
+  const SKY_HAZE = hex('#d2e9fa');
+  const crag1 = xx => Math.abs(((xx * 0.14 + fbm1(xx / 26, 13, 3) * 3.6) % 9) - 4.5) * 1.05;
+  const r1 = xx => 29 + fbm1(xx / 70, 33, 5) * 34 - crag1(xx) - Math.max(0, 12 - Math.abs(xx - 488) / 15);
+  const r2 = xx => 58 + fbm1(xx / 46, 45, 4) * 25 - Math.abs(((xx * 0.17) % 6) - 3) * 0.75;
+  for (let xx = 0; xx < W; xx++) {
+    const t1 = Math.round(r1(xx)), s1 = clamp((r1(xx + 4) - r1(xx - 4)) * 0.16, -1, 1);
+    const sunProx = clamp(1 - Math.abs(xx - 488) / 260) * 0.22;
+    const base1 = s1 < 0 ? mix(A, RIM, clamp(-s1 * 0.28 + sunProx, 0, 0.42)) : mix(A, SH, clamp(s1 * 0.40, 0, 0.50));
+    for (let y = t1; y < 150; y++) {
+      const t = clamp((y - t1) / 52);
+      const gully = Math.sin((xx - y * 0.68) * 0.12 + fbm1(xx / 20, 19, 2) * 2.4);
+      let col = mix(base1, B, t * 0.80 + (gully > 0.44 && y - t1 > 4 ? -0.09 : 0) + (bayer(xx, y) - 0.5) * 0.18);
+      if (y > 98) col = mix(col, SKY_HAZE, clamp((y - 98) / 52) * 0.44);
+      if (y - t1 < 2) col = mix(A, RIM, clamp(0.62 - s1 * 0.34 + sunProx, 0.24, 0.96));
+      x.fillStyle = rgb(col); x.fillRect(xx, y, 1, 1);
+    }
+    const t2 = Math.round(r2(xx)), s2 = clamp((r2(xx + 4) - r2(xx - 4)) * 0.16, -1, 1);
+    const base2 = s2 < 0 ? mix(A2, RIM2, clamp(-s2 * 0.26 + sunProx, 0, 0.38)) : mix(A2, SH2, clamp(s2 * 0.38, 0, 0.48));
+    for (let y = t2; y < 150; y++) {
+      const t = clamp((y - t2) / 44);
+      const rib = ((xx - Math.floor(y * 0.52)) % 17 === 0) ? -0.08 : 0;
+      let col = mix(base2, B2, t * 0.84 + rib + (bayer(xx, y) - 0.5) * 0.20);
+      if (y > 108) col = mix(col, SKY_HAZE, clamp((y - 108) / 42) * 0.36);
+      if (y - t2 < 1) col = mix(A2, RIM2, clamp(0.54 - s2 * 0.32 + sunProx, 0.2, 0.90));
+      x.fillStyle = rgb(col); x.fillRect(xx, y, 1, 1);
+    }
+    if (hash(xx, 107) > 0.86) {
+      const ph = 3 + Math.floor(hash(xx, 108) * 3);
+      x.fillStyle = rgb(mix(A2, [34, 62, 54], 0.40));
+      for (let k = 0; k < ph; k++) x.fillRect(xx - Math.floor(k / 3), t2 - ph + k, 1 + Math.floor(k / 3) * 2, 1);
+    }
+  }
+  L.range3 = c;
+}
+
 // ---------- MIST ----------
 function buildMist() {
   const w = W, h = 46;
@@ -216,16 +362,45 @@ function buildForeBase() {
 }
 
 export function buildWorld() {
-  buildSky(); buildRange(); buildMist(); buildForeBase();
+  buildSky(); buildSkyS2(); buildRange(); buildRangeS2(); buildMist(); buildForeBase();
   L.skull = buildSkull(W).toCanvas(); L.hills = buildHills(W).toCanvas(); L.village = buildVillage(W).toCanvas();
   L.near = buildNear(W).toCanvas(); L.ground = buildMeadow(W).toCanvas(); L.scarecrow = buildScarecrow().toCanvas();
-  L.clouds = CLOUDS.map(([s, w, h, x0, , , , kind]) => kind === 'streak' ? buildStreak(s, w, h) : buildCloud(s, w, h, x0));
+  L.clouds = CLOUDS.map(([s, w, h, x0, , , , kind]) => kind === 'streak' ? buildStreak(s, w, h, false) : buildCloud(s, w, h, x0, CLOUD_RAMP, false));
+  // Stage 2: Hedrun's Turnip Fields (mid-morning)
+  L.farS2 = buildFarHillsS2(W).toCanvas();
+  L.farmS2 = buildFarmhouseS2(W).toCanvas();
+  L.hedrunS2 = buildHedrunFrames();
+  L.nearS2 = buildNearS2(W).toCanvas();
+  L.groundS2 = buildGroundS2(W).toCanvas();
+  L.clouds2 = CLOUDS.map(([s, w, h, x0, , , , kind]) => kind === 'streak' ? buildStreak(s, w, h, true) : buildCloud(s, w, h, x0, CLOUD_RAMP_S2, true));
+  // Stage 3: Hedrun's Cider Barn (high noon)
+  buildSkyS3(); buildRangeS3();
+  L.farS3 = buildFarOrchardS3(W).toCanvas();
+  L.barnS3 = buildCiderBarnS3(W).toCanvas();
+  L.nearS3 = buildNearS3(W).toCanvas();
+  L.groundS3 = buildGroundS3(W).toCanvas();
+  L.hedrunGiftS3 = buildHedrunGiftSprite();
 }
 
-// ─────────────── per-frame drawing ───────────────
-export function sunPos(p, t) { return { x: 402, y: 160 + off(p, F.sun) - Math.min(6, t * 0.3) }; }
+let hedrunS3ClearAt = null;
+export function setHedrunStage3ClearAt(s = null) { hedrunS3ClearAt = s; }
 
-export function drawSky(ctx, p, t) {
+// ─────────────── per-frame drawing ───────────────
+export function sunPos(p, t, stg = 1) {
+  if (stg === 3) return { x: 488, y: 56 + off(p, F.sun) };
+  if (stg >= 2) return { x: 468, y: 88 + off(p, F.sun) };
+  return { x: 402, y: 160 + off(p, F.sun) - Math.min(6, t * 0.3) };
+}
+
+export function drawSky(ctx, p, t, stg = 1) {
+  if (stg === 3) {
+    ctx.drawImage(L.sky3, 0, -Math.round(PAN * F.sky) + off(p, F.sky));
+    return;
+  }
+  if (stg >= 2) {
+    ctx.drawImage(L.sky2, 0, -Math.round(PAN * F.sky) + off(p, F.sky));
+    return;
+  }
   ctx.drawImage(L.sky, 0, -Math.round(PAN * F.sky) + off(p, F.sky));
   // stars fade as dawn breaks and as we tilt down
   const sa = clamp(1 - p * 1.25) * clamp(1 - t / 14);
@@ -259,44 +434,110 @@ export function drawSky(ctx, p, t) {
   }
 }
 
-export function drawSun(ctx, p, t) {
-  const s = sunPos(p, t);
+export function drawSun(ctx, p, t, stg = 1) {
+  const s = sunPos(p, t, stg);
   ctx.globalCompositeOperation = 'lighter';
-  for (const [r, a] of [[150, 0.16], [70, 0.22], [30, 0.35]]) {
+  const rings = stg === 3 ? [[105, 0.14], [48, 0.22], [22, 0.36]] : stg >= 2 ? [[96, 0.12], [44, 0.20], [20, 0.34]] : [[150, 0.16], [70, 0.22], [30, 0.35]];
+  for (const [r, a] of rings) {
     const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, r);
-    g.addColorStop(0, `rgba(255,214,150,${a})`); g.addColorStop(1, 'rgba(255,190,140,0)');
+    g.addColorStop(0, `rgba(255,228,170,${a})`); g.addColorStop(1, 'rgba(255,204,150,0)');
     ctx.fillStyle = g; ctx.fillRect(s.x - r, s.y - r, r * 2, r * 2);
   }
   ctx.globalCompositeOperation = 'source-over';
-  pxEllipse(ctx, s.x, s.y, 14, 14, '#ffd98c');
-  pxEllipse(ctx, s.x, s.y, 12, 12, '#fff0b8');
-  pxEllipse(ctx, s.x, s.y, 9, 9, '#fffbe8');
+  pxEllipse(ctx, s.x, s.y, stg >= 2 ? 12 : 14, stg >= 2 ? 12 : 14, stg >= 2 ? '#ffe49c' : '#ffd98c');
+  pxEllipse(ctx, s.x, s.y, stg >= 2 ? 10 : 12, stg >= 2 ? 10 : 12, '#fff4c8');
+  pxEllipse(ctx, s.x, s.y, stg >= 2 ? 8 : 9, stg >= 2 ? 8 : 9, '#fffef2');
 }
 
-export function drawClouds(ctx, p, t) {
+export function drawClouds(ctx, p, t, stg = 1) {
+  const imgs = stg >= 2 ? L.clouds2 : L.clouds;
   CLOUDS.forEach(([, w, , x0, sy, f, vx], i) => {
     const y = sy - Math.round(PAN * f) + off(p, f);
     let xx = ((x0 + vx * t) % (W + w + 40));
     if (xx < -w - 20) xx += W + w + 40;
-    ctx.drawImage(L.clouds[i], Math.round(xx), y);
+    ctx.drawImage(imgs[i], Math.round(xx), y);
   });
 }
 
-export function drawRange(ctx, p) { ctx.drawImage(L.range, 0, 110 + off(p, F.range)); }
-export function drawFar(ctx, p, t) {
+export function drawRange(ctx, p, stg = 1) { ctx.drawImage(stg === 3 ? L.range3 : stg >= 2 ? L.range2 : L.range, 0, 110 + off(p, F.range)); }
+export function drawFar(ctx, p, t, stg = 1) {
+  if (stg === 3) {
+    const hy = HILLS_Y + off(p, F.hills);
+    ctx.drawImage(L.farS3, 0, hy);
+    return;
+  }
+  if (stg >= 2) {
+    const hy = HILLS_Y + off(p, F.hills);
+    ctx.drawImage(L.farS2, 0, hy); drawMillSailsS2(ctx, 0, hy, t);
+    return;
+  }
   ctx.drawImage(L.skull, 0, SKULL_Y + off(p, F.far));
   const hy = HILLS_Y + off(p, F.hills);
   ctx.drawImage(L.hills, 0, hy); drawMillSails(ctx, 0, hy, t);
 }
-export function drawVillage(ctx, p, t) {
+export function drawVillage(ctx, p, t, stg = 1) {
   const vy = VILLAGE_Y + off(p, F.village);
+  if (stg === 3) {
+    ctx.drawImage(L.barnS3, 0, vy);
+    windowGlows(ctx, WINDOWS_S3, vy, t, 0.34);
+    // Animated amber cider droplets & glistening puddle sparkles at leaking barrels + apple press spout
+    for (const [bx, by, ph] of [[322, 267, 0.0], [342, 268, 0.37], [496, 267, 0.71], [468, 265, 0.19]]) {
+      const cyc = (t * 0.85 + ph) % 1;
+      if (cyc < 0.65) {
+        const dy = Math.round((cyc / 0.65) * 6);
+        ctx.fillStyle = cyc < 0.3 ? '#fff09c' : '#eaa02c';
+        ctx.fillRect(bx, by + dy + vy, 1, 2);
+      } else {
+        const rk = (cyc - 0.65) / 0.35;
+        ctx.globalAlpha = 1 - rk;
+        ctx.fillStyle = '#fff09c';
+        ctx.fillRect(bx - Math.round(rk * 3), by + 6 + vy, 1, 1);
+        ctx.fillRect(bx + Math.round(rk * 3), by + 6 + vy, 1, 1);
+        ctx.globalAlpha = 1;
+      }
+    }
+    // Hedrun either sits up on the barn roof waving his pitchfork, or climbs down on clear to gift Healing Potions
+    if (hedrunS3ClearAt === null) {
+      const hf = L.hedrunS2[Math.floor(t * 3.8) % L.hedrunS2.length];
+      ctx.drawImage(hf, HEDRUN_BARN_POS.x - 19, HEDRUN_BARN_POS.roofY - 41 + vy);
+    } else {
+      const dt = Math.max(0, t - hedrunS3ClearAt);
+      if (dt < 0.65) {
+        const k = clamp(dt / 0.65);
+        const hx = Math.round(lerp(HEDRUN_BARN_POS.x, HEDRUN_BARN_POS.ladderX, k));
+        const hy = Math.round(lerp(HEDRUN_BARN_POS.roofY, 198, k));
+        const hf = L.hedrunS2[Math.floor(t * 5) % L.hedrunS2.length];
+        ctx.drawImage(hf, hx - 19, hy - 41 + vy);
+      } else if (dt < 1.85) {
+        const k = clamp((dt - 0.65) / 1.2);
+        const hx = Math.round(lerp(HEDRUN_BARN_POS.ladderX, HEDRUN_BARN_POS.doorX, k));
+        const hy = Math.round(lerp(198, HEDRUN_BARN_POS.groundY, k));
+        const step = Math.round(Math.sin(dt * 14) * 1.5);
+        ctx.drawImage(L.hedrunGiftS3, hx - 18, hy - 42 + vy + step);
+      } else {
+        const bob = Math.round(Math.sin(t * 2.4) * 1);
+        ctx.drawImage(L.hedrunGiftS3, HEDRUN_BARN_POS.doorX - 18, HEDRUN_BARN_POS.groundY - 42 + vy + bob);
+      }
+    }
+    return;
+  }
+  if (stg >= 2) {
+    ctx.drawImage(L.farmS2, 0, vy);
+    windowGlows(ctx, WINDOWS_S2, vy, t, 0.35);
+    const hf = L.hedrunS2[Math.floor(t * 3.8) % L.hedrunS2.length];
+    ctx.drawImage(hf, HEDRUN_POS.x - 19, HEDRUN_POS.roofY - 41 + vy);
+    return;
+  }
   ctx.drawImage(L.village, 0, vy); drawInnSign(ctx, 0, vy, t);
   windowGlows(ctx, WINDOWS, vy, t, 1 - clamp(inv(14, 40, t)) * 0.4);
 }
-export function drawScarecrow(ctx, p) { ctx.drawImage(L.scarecrow, SC.x - (SC_W >> 1), SC.base - SC_BASE + off(p, F.ground)); }
+export function drawScarecrow(ctx, p, stg = 1) {
+  if (stg >= 2) return;
+  ctx.drawImage(L.scarecrow, SC.x - (SC_W >> 1), SC.base - SC_BASE + off(p, F.ground));
+}
 
-export function drawMist(ctx, p, t) {
-  const fade = 0.62 - clamp(t / 40) * 0.25;
+export function drawMist(ctx, p, t, stg = 1) {
+  const fade = stg === 3 ? 0.18 : stg >= 2 ? 0.28 : 0.62 - clamp(t / 40) * 0.25;
   const y = 214 + off(p, F.mist);
   for (const [dy, sp, a] of [[0, 4, 1], [16, -2.5, 0.7]]) {
     const ox = Math.round((t * sp) % W);
@@ -306,12 +547,12 @@ export function drawMist(ctx, p, t) {
   ctx.globalAlpha = 1;
 }
 
-export function drawNear(ctx, p) { ctx.drawImage(L.near, 0, NY + off(p, F.near)); }
-export function drawGround(ctx, p, t = 0) {
+export function drawNear(ctx, p, stg = 1) { ctx.drawImage(stg === 3 ? L.nearS3 : stg >= 2 ? L.nearS2 : L.near, 0, NY + off(p, F.near)); }
+export function drawGround(ctx, p, t = 0, stg = 1) {
   const oy = off(p, F.ground);
-  ctx.drawImage(L.ground, 0, GY + oy);
-  sunPool(ctx, sunPos(p, t), oy, t, clamp(inv(2, 10, t)));
-  cloudShadows(ctx, oy, t, clamp(inv(4, 12, t)));
+  ctx.drawImage(stg === 3 ? L.groundS3 : stg >= 2 ? L.groundS2 : L.ground, 0, GY + oy);
+  sunPool(ctx, sunPos(p, t, stg), oy, t, stg >= 2 ? 0.65 : clamp(inv(2, 10, t)));
+  cloudShadows(ctx, oy, t, stg >= 2 ? 0.42 : clamp(inv(4, 12, t)));
 }
 
 export function drawForeground(ctx, p, t) {
@@ -348,18 +589,18 @@ export function drawForeground(ctx, p, t) {
   ctx.globalAlpha = 1;
 }
 
-// God rays fanning from the low sun
-export function drawGodRays(ctx, p, t) {
-  const s = sunPos(p, t);
+// God rays fanning from the sun
+export function drawGodRays(ctx, p, t, stg = 1) {
+  const s = sunPos(p, t, stg);
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   const rays = 11;
   for (let i = 0; i < rays; i++) {
     const a0 = -Math.PI + (i / (rays - 1)) * Math.PI * 2 * 0.98 + Math.sin(t * 0.07 + i) * 0.03;
     const wid = 0.035 + hash(i, 91) * 0.05;
-    const len = 520;
+    const len = stg >= 2 ? 460 : 520;
     const pulse = 0.5 + 0.5 * Math.sin(t * 0.45 + i * 1.7);
-    const alpha = (0.035 + 0.04 * pulse) * (i % 2 ? 0.7 : 1);
+    const alpha = (0.035 + 0.04 * pulse) * (i % 2 ? 0.7 : 1) * (stg >= 2 ? 0.55 : 1);
     const g = ctx.createRadialGradient(s.x, s.y, 10, s.x, s.y, len);
     g.addColorStop(0, `rgba(255,224,170,${alpha})`); g.addColorStop(1, 'rgba(255,200,150,0)');
     ctx.fillStyle = g;
@@ -371,14 +612,28 @@ export function drawGodRays(ctx, p, t) {
   ctx.restore();
 }
 
-// Colour grade: pre-dawn chill warming into golden morning, warm key light, vignette
-export function drawGrade(ctx, p, t) {
+// Colour grade: pre-dawn chill warming into golden morning, or crisp sunny mid-morning for Stage 2
+export function drawGrade(ctx, p, t, stg = 1) {
+  if (stg >= 2) {
+    const s = sunPos(p, t, stg);
+    ctx.globalCompositeOperation = 'soft-light';
+    const g = ctx.createRadialGradient(s.x, s.y, 20, s.x, s.y, 560);
+    g.addColorStop(0, stg === 3 ? 'rgba(255,244,196,0.38)' : 'rgba(255,236,184,0.34)');
+    g.addColorStop(1, stg === 3 ? 'rgba(110,185,248,0.08)' : 'rgba(130,185,245,0.06)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'multiply';
+    const v = ctx.createRadialGradient(W / 2, H * 0.55, H * 0.4, W / 2, H * 0.55, W * 0.72);
+    v.addColorStop(0, 'rgba(255,255,255,1)'); v.addColorStop(1, 'rgba(85,95,120,1)');
+    ctx.globalAlpha = stg === 3 ? 0.12 : 0.14; ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+    return;
+  }
   const chill = clamp(1 - inv(0.5, 10, t));
   if (chill > 0) {
     ctx.globalCompositeOperation = 'multiply';
     ctx.fillStyle = `rgba(110,92,160,${0.5 * chill})`; ctx.fillRect(0, 0, W, H);
   }
-  const s = sunPos(p, t);
+  const s = sunPos(p, t, stg);
   ctx.globalCompositeOperation = 'soft-light';
   const g = ctx.createRadialGradient(s.x, s.y, 20, s.x, s.y, 520);
   g.addColorStop(0, 'rgba(255,196,120,0.6)'); g.addColorStop(1, 'rgba(150,110,170,0.12)');

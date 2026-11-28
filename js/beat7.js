@@ -12,6 +12,7 @@ import { DIALOGUE, UI_SCALE as S, lineEnd } from './timeline.js';
 import { F, off } from './world.js';
 import * as cb from './combat.js';
 import * as beat6 from './beat6.js';
+import * as beat8 from './beat8.js';
 import { flashGearTile, addGearBadge } from './hud.js';
 import { buildGauntlet, GAUNTLET_TIP } from './art/gauntlet.js';
 import { mulberry, clamp, easeOut, easeOutBack, hash, makeCanvas, crispText } from './util.js';
@@ -176,6 +177,7 @@ function busyLine(s) {
 export function started() { return !!D && D.startAt !== null; }
 export function cardOpen() { return false; }
 export function finished(t) { return !!D && D.doneAt !== null && cb.warp(t) > D.doneAt + 0.15; }
+export function dismissToasts(t) { if (D) for (const tr of D.toasts) if (tr.dismissAt === null) tr.dismissAt = t; }
 export function wantsPointer() {
   return !!D && (D.loot.some(l => l.state === 'rest') || D.toasts.length > 0);
 }
@@ -270,6 +272,9 @@ function tick(s) {
   if (D.phase === 'flee' || D.phase === 'dither') fleeTick(g, s);
   stumbleTick(g, s);
   strikeWatch(g, s);
+  if (D.round && !D.round.sw && (g.dieAt !== undefined || !isFinite(g.meleeAt) || g.meleeAt > s + 0.05)) {
+    D.round.t0 += DT; D.round.full += DT; D.round.at += DT;
+  }
   heroTurn(s);
 
   if (g.dieAt !== undefined && D.dieNoted === null) {
@@ -319,21 +324,33 @@ function fleeTick(g, s) {
 }
 function doStumble(g, s) {
   D.phase = 'stumble';
-  D.stumbleUntil = s + 1.35;
   const at = cb.moveRat(g, s, cb.SLOT[0] + 20, { speed: 330, kind: 'dash' });
+  D.stumbleUntil = at + 1.45;
   g.meleeAt = at;
   cb.E.live.push({ s, k: 'squeak', pan: 0.35 });
   D.nextStumble = Infinity;
 }
 function stumbleTick(g, s) {
   if (D.phase !== 'stumble') return;
+  if (g.dieAt === undefined && isFinite(g.meleeAt) && g.meleeAt <= s + 0.3) {
+    if (g.nextBite === undefined) g.nextBite = g.meleeAt + 0.8;
+    if (s >= g.nextBite - 0.3) {
+      const at = g.nextBite;
+      cb.addBite({ at, rat: g.id, roll: 1 + Math.floor(D.rng() * 20), dmg: 2 });
+      g.nextBite = at + cb.RULES.snikRound;
+    }
+  }
   if (s >= D.stumbleUntil) {
     g.meleeAt = Infinity;
     D.nextStumble = s + 2.4;
     D.phase = 'flee';
     flee(g, s);
   }
-  if (!D.round && isFinite(g.meleeAt) && g.meleeAt <= s + 0.2) { D.round = { t0: s, full: s + 0.75, at: s + 0.75 }; cb.E.rounds.push(D.round); }
+  if (!D.round && isFinite(g.meleeAt) && g.meleeAt <= s + 0.05 && g.dieAt === undefined) {
+    const rd = cb.RULES.round * (cb.E.roundMult || 1);
+    D.round = { t0: s, full: s + rd, at: s + rd };
+    cb.E.rounds.push(D.round);
+  }
 }
 function strikeWatch(g, s) {
   for (const cs of cb.E.strikes) {
@@ -345,6 +362,8 @@ function strikeWatch(g, s) {
       cb.moveRat(g, cs.at, b.x - 6, { dur: 0.1 });
       D.staggerUntil = cs.at + 0.9;
       D.nextStumble = Math.min(D.nextStumble, cs.at + 1.4);
+    } else if (D.phase === 'stumble') {
+      D.stumbleUntil += 0.25;
     }
   }
 }
@@ -459,7 +478,7 @@ export function drawOverlay(ctx, uctx, p, t) {
   drawBanner(ctx, s);
   drawGauntlet(ctx, s, og);
   drawLoot(ctx, s);
-  if (D.toasts.length) drawToasts(uctx, t);
+  if (D.toasts.length && !beat6.trainingOpen() && !beat8.gearOpen()) drawToasts(uctx, t);
 }
 
 function drawBubble(ctx, s, og) {

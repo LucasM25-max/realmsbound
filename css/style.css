@@ -28,6 +28,13 @@ body { display: grid; place-items: center; }
   box-shadow: 0 0 0 1px #140b14, 0 18px 60px rgba(0,0,0,.6);
 }
 body.playing #stage { cursor: default; }
+html.playing,
+html.playing body,
+html.playing #stage,
+html.playing #stage canvas,
+html.playing .ctl {
+  cursor: var(--gauntlet-cur, default) !important;
+}
 
 #stage canvas {
   position: absolute; inset: 0;

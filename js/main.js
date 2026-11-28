@@ -19,6 +19,8 @@ import * as beat6 from './beat6.js';
 import * as beat7 from './beat7.js';
 import * as beat8 from './beat8.js';
 import * as beat9 from './beat9.js';
+import * as customiser from './customiser.js';
+import * as stage2 from './stage2.js';
 import { gauntletCursor } from './art/gauntlet.js';
 import { DIALOGUE, hudLine, skipElminster, resetSkipElminster, isElminsterSkipped } from './timeline.js';
 
@@ -51,7 +53,7 @@ fit();
 function sceneTime() {
   if (SEEK !== null && !started) return SEEK;
   if (!started) return 0;
-  if (audio && audio.ctx && audio.session) return audio.now();
+  if (audio && audio.ctx && audio.ctx.state === 'running' && audio.session) return audio.now();
   return (performance.now() - clockStart) / 1000;
 }
 
@@ -62,8 +64,10 @@ async function begin(seek = 0) {
   document.body.classList.add('playing');
   try {
     if (!audio) { audio = new AudioEngine(); await audio.init(); }
+    audio.setHeroVoice(customiser.currentStyle().voice);
     if (audio.ctx.state === 'suspended') await audio.ctx.resume();
-    audio.start(seek);
+    const cur = Math.max(seek, (performance.now() - clockStart) / 1000);
+    audio.start(cur);
   } catch (e) { console.warn('audio unavailable', e); audio = null; }
 }
 
@@ -90,29 +94,55 @@ stage.addEventListener('pointerdown', e => {
   if (!ready) return;
   if (!started) { begin(SEEK ?? 0); return; }
   const t = sceneTime(), [gx, gy] = toGame(e);
-  // a modal screen owns every click while it's open (Training or Gear)
+  if (stage2.inTransition()) return;
+  if (customiser.isOpen()) { customiser.click(gx, gy, t); return; }
+  // a modal screen owns every click while it's open (Training, Gear, or Level-Up showcase)
   if (beat6.trainingOpen() || beat8.gearOpen()) { if (!beat6.click(gx, gy, t)) beat8.click(gx, gy, t); return; }
+  if (stage2.levelCardOpen()) { stage2.clickBelt(gx, gy, t); return; }
+  if (stage2.clickNext(gx, gy, t)) return;         // unlocked NEXT ▶ bookmark
+  if (stage2.clickHero(gx, gy, t)) return;         // [H] Hero belt tile or Portrait medallion
+  if (stage2.clickBelt(gx, gy, t)) return;         // Action Surge [Q], Potion [2], Lv2 card dismiss
   if (beat7.click(gx, gy, t)) return;              // Snikkit's loot card and the spoils in the grass
+  if (beat6.clickNow(gx, gy, t)) return;           // the NOW tooltip + green quick-buy arrow above Train
   if (beat6.click(gx, gy, t)) return;              // the Train tile
   if (beat8.click(gx, gy, t)) return;              // the Gear tile
   if (ui.inSkip(gx, gy, t) && triggerSkipElminster(t)) return;
   // clicking the dialogue box finishes the line (nobody has to wait on an old wizard)
   if (t >= T.hudIn[1] && ui.inHUD(gx, gy)) { const d = hudLine(t); if (!d.skip) d.skip = t; return; }
-  if (!beat3.click(gx, gy, t)) beat2.click(gx, gy, t);
+  if (!beat3.click(gx, gy, t)) { if (!beat2.click(gx, gy, t)) stage2.click(gx, gy, t); }
 });
-stage.addEventListener('pointermove', e => { if (!started) return; const [gx, gy] = toGame(e); beat2.hover(gx, gy); beat7.hover(gx, gy); beat8.hover(gx, gy); });
-stage.addEventListener('pointerleave', () => { beat2.hover(null, null); beat7.hover(null, null); beat8.hover(null, null); });
+stage.addEventListener('pointermove', e => {
+  if (!started) return;
+  const [gx, gy] = toGame(e);
+  beat2.hover(gx, gy);
+  if (!customiser.isOpen() && !beat6.trainingOpen() && !beat8.gearOpen() && !stage2.inTransition() && !stage2.levelCardOpen()) {
+    beat3.hover(gx, gy, sceneTime());
+  }
+  stage2.hover(gx, gy);
+  beat7.hover(gx, gy);
+  beat8.hover(gx, gy);
+});
+stage.addEventListener('pointerleave', () => { beat2.hover(null, null); beat3.hover(null, null, 0); stage2.hover(null, null); beat7.hover(null, null); beat8.hover(null, null); });
 stage.addEventListener('wheel', e => { if (started && beat8.gearOpen() && beat8.wheel(e.deltaY)) e.preventDefault(); }, { passive: false });
 addEventListener('keydown', e => {
+  const kt = sceneTime();
+  if (started && customiser.isTypingName()) {
+    customiser.key(e.key, kt);
+    if (e.key === ' ') e.preventDefault();
+    return;
+  }
   if (e.key === 'm' || e.key === 'M') { if (audio) { audio.setMuted(!audio.muted); muteBtn.classList.toggle('off', audio.muted); hud.setHudMuted(audio.muted); } return; }
   if (e.key === 'r' || e.key === 'R') { if (started) replay(); return; }
-  const kt = sceneTime();
-  if (started && beat8.gearOpen()) { if (beat8.key(e.key, kt)) return; }            // the Gear screen owns its keys
+  if (stage2.inTransition()) return;
+  if (started && customiser.isOpen()) { if (customiser.key(e.key, kt)) return; }
+  else if (started && beat8.gearOpen()) { if (beat8.key(e.key, kt)) return; }       // the Gear screen owns its keys
   else if (started && beat6.trainingOpen()) { if (beat6.key(e.key, kt)) return; }   // the Training screen owns its keys
   else if (started) {
+    if (stage2.levelCardOpen()) { stage2.key(e.key, kt); return; }
     if ((e.key === 's' || e.key === 'S' || (e.key === 'Escape' && kt < T.beat1)) && triggerSkipElminster(kt)) return;
     if ((e.key === 't' || e.key === 'T') && beat6.key(e.key, kt)) return;
     if ((e.key === 'g' || e.key === 'G') && beat8.key(e.key, kt)) return;
+    if (stage2.key(e.key, kt)) return;
     if (e.key === 'Escape' && beat7.key(e.key, kt)) return;
     if ((e.key === ' ' || e.key === 'Enter') && beat7.key(e.key, kt)) return;
   }
@@ -130,10 +160,12 @@ function replay() {
   beat7.reset();
   beat8.reset();
   beat9.reset();
+  customiser.reset();
+  stage2.reset();
   resetSkipElminster();
   ui.resetSpeech();
   for (const d of Object.values(DIALOGUE)) delete d.skip;
-  clockStart = performance.now(); if (audio) audio.start(0);
+  clockStart = performance.now(); if (audio) { audio.setHeroVoice(customiser.currentStyle().voice); audio.start(0); }
 }
 // the pointer becomes a steel gauntlet whenever playing (pixel-crisp at the stage's scale)
 let cursorKey = '';
@@ -143,16 +175,25 @@ function updateCursor() {
   const key = on ? 'g' + sc : 'd';
   if (key === cursorKey) return;
   cursorKey = key;
+  document.documentElement.classList.toggle('playing', on);
   if (!on) {
-    stage.style.cursor = '';
+    document.documentElement.style.removeProperty('--gauntlet-cur');
+    document.documentElement.style.cursor = '';
     document.body.style.cursor = '';
+    stage.style.cursor = '';
+    game.style.cursor = '';
+    uiC.style.cursor = '';
     muteBtn.style.cursor = '';
     return;
   }
   const g = gauntletCursor(sc);
   const cur = `url(${g.url}) ${g.hx} ${g.hy}, pointer`;
-  stage.style.cursor = cur;
+  document.documentElement.style.setProperty('--gauntlet-cur', cur);
+  document.documentElement.style.cursor = cur;
   document.body.style.cursor = cur;
+  stage.style.cursor = cur;
+  game.style.cursor = cur;
+  uiC.style.cursor = cur;
   muteBtn.style.cursor = cur;
 }
 
@@ -165,35 +206,37 @@ function renderScene(t) {
   beat6.step(t);                                   // …and the first trip to the Training Yard (Beat 6)
   beat7.step(t);                                   // …and Snikkit's pie-heist (Beat 7)
   beat8.step(t);                                   // …and the first equip (Beat 8)
-  beat9.step(t);                                   // …and the first level-up (Beat 9)
+  beat9.step(t);                                   // …and the stage-clear beat (Beat 9)
+  stage2.step(t);                                  // …and Beat 10 / 10b / Stage 2+ combat
   const cues = combat.takeLiveCues(); if (audio && started) audio.addLive(cues);
+  const stg = combat.E?.stage || 1;
   const p = easeInOut(inv(T.pan[0], T.pan[1], t));
   ctx.clearRect(0, 0, W, H);
   uctx.clearRect(0, 0, uiC.width, uiC.height);
-  world.drawSky(ctx, p, t);
-  world.drawSun(ctx, p, t);
-  world.drawGodRays(ctx, p, t);
-  world.drawClouds(ctx, p, t);
-  act.drawBirds(ctx, p, t);
-  world.drawRange(ctx, p, t);
-  world.drawFar(ctx, p, t);
-  world.drawMist(ctx, p, t);
-  world.drawVillage(ctx, p, t);
-  act.drawChimneySmoke(ctx, p, t);
-  world.drawNear(ctx, p, t);
-  world.drawGround(ctx, p, t);
-  world.drawScarecrow(ctx, p, t);
-  act.drawCrow(ctx, p, t);
-  act.drawBurrowRustle(ctx, p, t);
+  world.drawSky(ctx, p, t, stg);
+  world.drawSun(ctx, p, t, stg);
+  world.drawGodRays(ctx, p, t, stg);
+  world.drawClouds(ctx, p, t, stg);
+  act.drawBirds(ctx, p, t, stg);
+  world.drawRange(ctx, p, stg);
+  world.drawFar(ctx, p, t, stg);
+  world.drawMist(ctx, p, t, stg);
+  world.drawVillage(ctx, p, t, stg);
+  act.drawChimneySmoke(ctx, p, t, stg);
+  world.drawNear(ctx, p, stg);
+  world.drawGround(ctx, p, t, stg);
+  world.drawScarecrow(ctx, p, stg);
+  act.drawCrow(ctx, p, t, stg);
+  act.drawBurrowRustle(ctx, p, t, stg);
   act.drawHero(ctx, p, t);
   const hb = act.heroBox(p, t);
   combat.drawCombatWorld(ctx, p, t, hb);
   act.drawElminster(ctx, p, t);
   act.drawPipeSmoke(ctx, p, t);
-  act.drawButterflies(ctx, p, t);
+  act.drawButterflies(ctx, p, t, stg);
   act.drawMotes(ctx, p, t);
-  world.drawForeground(ctx, p, t);
-  world.drawGrade(ctx, p, t);
+  world.drawForeground(ctx, p, t, stg);
+  world.drawGrade(ctx, p, t, stg);
   // a hit shakes the world (never the HUD): blit the finished world back onto itself, offset
   const [shx, shy] = combat.combatShake(t);
   if (shx || shy) ctx.drawImage(game, shx, shy);
@@ -210,6 +253,7 @@ function renderScene(t) {
   beat4.drawSpot(ctx, p, t);                       // Beat 4's spotlight dims the world + HUD…
   beat6.drawSpot(ctx, p, t);                       // …Beat 6's too, on the pulsing Train tile
   beat8.drawSpot(ctx, p, t);                       // …and Beat 8's, on the Gear tile
+  stage2.drawSpot(ctx, p, t);                      // …and Beat 10's, on the NEXT ▶ bookmark
   ui.drawHUD(ctx, uctx, t);                        // …but never the wizard's own box
   ui.drawSkipButton(ctx, uctx, t);
   combat.drawCombatOverlay(ctx, p, t, hb);
@@ -219,7 +263,9 @@ function renderScene(t) {
   beat5.drawOverlay(ctx, uctx, p, t);
   beat7.drawOverlay(ctx, uctx, p, t);              // Snikkit, the loot and the loot card
   beat8.drawOverlay(ctx, uctx, p, t);              // the Gear screen
-  beat9.drawOverlay(ctx, uctx, p, t);              // the level-up pillar and banner
+  beat9.drawOverlay(ctx, uctx, p, t);              // the Stage Clear banner
+  stage2.drawOverlay(ctx, uctx, p, t);             // Beat 10 NEXT prompt & stage wipe
+  customiser.drawOverlay(ctx, uctx, p, t);         // Hero Appearance Customiser modal
   beat6.drawOverlay(ctx, uctx, p, t);              // the Training screen draws last: it's modal
   document.body.classList.toggle('hud', t >= hud.HUD_TIMES.purse + 0.3);
 }
@@ -274,6 +320,11 @@ function drawError() {
     beat8.buildBeat8();
     beat8.reset();
     beat9.reset();
+    customiser.buildCustomiser();
+    customiser.reset();
+    customiser.setBarkPlayer(voice => { if (audio) { audio.setHeroVoice(voice); audio.previewBark(voice); } });
+    stage2.buildStage2();
+    stage2.reset();
     ready = true;
     document.body.classList.add('ready');
     if (AUTOPLAY) begin(SEEK ?? 0);
@@ -283,15 +334,23 @@ function drawError() {
 
 // screenshot + test hooks
 window.__render = t => { renderScene(t); };
-window.__state = () => ({ t: +sceneTime().toFixed(2), started, audio: audio ? audio.ctx.state : null, muted: audio ? audio.muted : null,
-  voices: audio ? Object.keys(audio.voices).length : 0, nodes: audio && audio.session ? audio.session.nodes.length : 0, failed: failed ? String(failed) : null,
-  quota: combat.hudState(sceneTime()).quota, cp: combat.hudState(sceneTime()).cp,
-  replayShown: false, beat2: beat2.debug(), beat3: beat3.debug(), beat4: beat4.debug(), beat5: beat5.debug(), beat6: beat6.debug(), beat7: beat7.debug(), beat8: beat8.debug(), beat9: beat9.debug() });
+window.__seek = t => { started = true; clockStart = performance.now() - t * 1000; if (audio && audio.session) { audio.start(t); audio.t0 = audio.ctx.currentTime - t; } renderScene(t); };
+window.__state = () => {
+  const st = combat.hudState(sceneTime());
+  return { t: +sceneTime().toFixed(2), started, audio: audio ? audio.ctx.state : null, muted: audio ? audio.muted : null,
+    voices: audio ? Object.keys(audio.voices).length : 0, nodes: audio && audio.session ? audio.session.nodes.length : 0, failed: failed ? String(failed) : null,
+    quota: st.quota, quotaMax: st.quotaMax, cp: st.cp, xp: st.xp, level: st.level, stage: st.stage, stageName: st.stageName,
+    surgeReady: st.surgeReady, potions: st.potions, slowMo: combat.isSlowMo(),
+    replayShown: false, beat2: beat2.debug(), beat3: beat3.debug(), beat4: beat4.debug(), beat5: beat5.debug(), beat6: beat6.debug(), beat7: beat7.debug(), beat8: beat8.debug(), beat9: beat9.debug(),
+    stage2: stage2.debug(), customiser: { open: customiser.isOpen(), typing: customiser.isTypingName(), style: customiser.currentStyle() } };
+};
 // test hook: click a point on the native grid at the current time
-window.__click = (gx, gy) => { const t = sceneTime(); if (beat6.trainingOpen() || beat8.gearOpen()) return beat6.click(gx, gy, t) ? 'train' : (beat8.click(gx, gy, t) ? 'gear' : null); if (beat7.click(gx, gy, t)) return 'loot'; if (beat6.click(gx, gy, t)) return 'train'; if (beat8.click(gx, gy, t)) return 'gear'; if (ui.inSkip(gx, gy, t) && triggerSkipElminster(t)) return 'skip'; if (t >= T.hudIn[1] && ui.inHUD(gx, gy)) { const d = hudLine(t); if (!d.skip) d.skip = t; return 'hud'; } return beat3.click(gx, gy, t) ? 'coin' : beat2.click(gx, gy, t); };
+window.__click = (gx, gy) => { const t = sceneTime(); if (stage2.inTransition()) return null; if (customiser.isOpen()) return customiser.click(gx, gy, t) ? 'customiser' : null; if (beat6.trainingOpen() || beat8.gearOpen()) return beat6.click(gx, gy, t) ? 'train' : (beat8.click(gx, gy, t) ? 'gear' : null); if (stage2.levelCardOpen()) return stage2.clickBelt(gx, gy, t) ? 'lvcard' : null; if (stage2.clickNext(gx, gy, t)) return 'next'; if (stage2.clickHero(gx, gy, t)) return 'hero'; if (stage2.clickBelt(gx, gy, t)) return 'belt'; if (beat7.click(gx, gy, t)) return 'loot'; if (beat6.clickNow(gx, gy, t)) return 'now'; if (beat6.click(gx, gy, t)) return 'train'; if (beat8.click(gx, gy, t)) return 'gear'; if (ui.inSkip(gx, gy, t) && triggerSkipElminster(t)) return 'skip'; if (t >= T.hudIn[1] && ui.inHUD(gx, gy)) { const d = hudLine(t); if (!d.skip) d.skip = t; return 'hud'; } return beat3.click(gx, gy, t) ? 'coin' : (beat2.click(gx, gy, t) ? 'beat2' : stage2.click(gx, gy, t)); };
 window.__train = () => beat6.debug();
 window.__snik = () => beat7.debug();
 window.__gear = () => beat8.debug();
+window.__stage2 = () => stage2.debug();
+window.__customiser = () => customiser.debug();
 window.__ratPoints = () => beat2.ratPoints(sceneTime());
 window.__coinPoints = () => beat3.coinPoints(sceneTime());
 window.__goblinPoints = () => beat5.goblinPoints(sceneTime());

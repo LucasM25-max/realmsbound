@@ -21,17 +21,19 @@ import { T, W } from './timeline.js';
 import { F, off, PATH_Y, BURROW } from './world.js';
 import { buildRat, RAT_FEET, RAT_CX } from './art/rat.js';
 import { buildGoblin, GOB_FEET, GOB_CX } from './art/goblin.js';
+import { buildBeetle, BEETLE_FEET, BEETLE_CX } from './art/beetle.js';
 import { HERO_CX, HERO_FEET, HERO_SHOULDER } from './art/hero.js';
 import { silhouette, castShadow } from './fx.js';
 import { hash, clamp, inv, lerp, easeOut, easeIn, easeOutBack, pxEllipse, makeCanvas, bayer } from './util.js';
 import { C, P, Raster, ramp } from './pix.js';
 import { num, numWidth } from './pixfont.js';
+import { stageDef, RULES_XP, heroLevelForXP, xpBandProgress, surgeCooldownLeft, surgeSwingCount, DEFAULT_HERO_STYLE, normalizeHeroStyle, computeHeroSheet, mystraActiveForStage } from './progression.js';
 
 // ---------- rules ----------
 export const RULES = {
-  heroHP: 12, heroAC: 16, toHit: 5 /* PB 2 + STR 3 */, dmgBonus: 3, round: 6,
-  ratHP: 7, ratAC: 12, ratToHit: 4, ratXP: 8, gobXP: 12, snikXP: 26, lvl2XP: 300, ratRound: 4.25, csPct: 0.10,
-  gobRound: 4.75, bossCadence: 5,                              // goblins swing a touch slower than rats
+  heroHP: 12, heroAC: 16, toHit: 5 /* PB 2 + STR 3 */, dmgBonus: 3, round: 2.4,
+  ratHP: 7, ratAC: 12, ratToHit: 4, ratXP: 8, gobXP: 12, snikXP: 26, lvl2XP: 300, ratRound: 3.2, csPct: 0.10,
+  gobRound: 3.2, snikRound: 3.4, bossCadence: 5,               // Stage 1-3 monster & round clocks
 };
 export const HS = 0.07, CU = 0.16;    // hit-stop hold (about 2 frames at 30 fps), then a short catch-up
 export const LEAP = 0.42;             // a rat's leap out of the burrow
@@ -55,11 +57,13 @@ export const ratGroundY = (x, og, depth = 0) => PATH_Y(Math.round(x)) + 3 + og +
 // ---------- the event store ----------
 export let E = null;
 function fresh() {
-  return { rats: [], swings: [], bites: [], strikes: [], heals: [], focus: [], hits: [], rounds: [], coins: [], orbs: [],
+  return { rats: [], swings: [], bites: [], strikes: [], heals: [], focus: [], hits: [], rounds: [], coins: [], orbs: [], matDrops: [], projectiles: [],
     kills: 0, cues: [], live: [], liveOn: false, streak: 0, lastArrive: -9, spent: 0, dmgMult: 1, hpMult: 1, dmgReduce: 0,
-    roundMult: 1, extraStrikes: 0, strikeMult: 1, critBonus: 0, critRange: 20, goldFind: 1, autoCollect: false,
+    roundMult: 1, extraStrikes: 0, strikeMult: 1, critBonus: 0, critRange: 20, goldFind: 1, autoCollect: false, wardAt: -9,
     regenMult: 1, potionMult: 1, potionCapBonus: 0, training: {},
-    inv: [], gear: { helm: null, armor: null, cloak: null, weapon: null, shield: null, boots: null, ring1: null, ring2: null, amulet: null, trinket: null }, hpBonus: 0, level: 1, stage: 1 };
+    slowOffset: 0, slowWin: null, tacticalMind: false, levelUpAt: null, levelUpRealAt: null, levelUpEndAt: null, surgeUsedAt: -999, surgeActiveAt: null,
+    potions: 0, potionUsedAt: null, stage3ClearT: null,
+    inv: [], gear: { helm: null, armor: null, cloak: null, weapon: null, shield: null, boots: null, ring1: null, ring2: null, amulet: null, trinket: null }, hpBonus: 0, level: 1, stage: 1, heroStyle: { ...DEFAULT_HERO_STYLE }, build: computeHeroSheet(DEFAULT_HERO_STYLE, 1) };
 }
 // sound cues: Beat 1's are fixed (handed to the audio engine up front); Beat 2's are streamed as they're decided
 function cue(s, k, o = {}) { const c = { s, k, ...o }; (E.liveOn ? E.live : E.cues).push(c); return c; }
@@ -69,24 +73,50 @@ export function takeLiveCues() { const out = E.live.splice(0).map(c => Object.as
 // shared, per-frame UI state set by beat2.js (what the mouse is over, the tutorial's gold pulse)
 export const UI = { hover: -1, pulse: -1, pulseK: 0 };
 
-// ---------- hit-stop as a time warp ----------
-// the fight holds still for HS seconds after each hit, then catches up (outside those windows s === t)
+// ---------- slow-motion + hit-stop as a unified monotonic time warp ----------
+export function slowTime(t) {
+  if (!E || !E.slowWin) return t - (E ? E.slowOffset : 0);
+  const { t0, rate } = E.slowWin;
+  if (t <= t0) return t - E.slowOffset;
+  return (t0 - E.slowOffset) + (t - t0) * rate;
+}
+export function isSlowMo() { return !!(E && E.slowWin); }
+export function setSlowMo(rate, realT) {
+  if (!E) return;
+  const cur = slowTime(realT);
+  E.slowOffset = realT - cur;
+  E.slowWin = { t0: realT, rate };
+}
+export function endSlowMo(realT) {
+  if (!E || !E.slowWin) return;
+  const cur = slowTime(realT);
+  E.slowOffset = realT - cur;
+  E.slowWin = null;
+}
+
+// the fight holds still for HS seconds after each hit, then catches up (outside those windows s === tau)
 export function warp(t) {
+  const tau = slowTime(t);
   for (const h of E.hits) {
-    const d = t - h; if (d < 0) break;
+    const d = tau - h; if (d < 0) break;
     if (d < HS) return h;
     if (d < HS + CU) return h + (d - HS) * (HS + CU) / CU;
   }
-  return t;
+  return tau;
 }
 export function unwarp(s) {
-  for (const h of E.hits) { const d = s - h; if (d > 0 && d < HS + CU) return h + HS + d * CU / (HS + CU); }
-  return s;
+  let tau = s;
+  for (const h of E.hits) { const d = s - h; if (d > 0 && d < HS + CU) { tau = h + HS + d * CU / (HS + CU); break; } }
+  if (!E || !E.slowWin) return tau + (E ? E.slowOffset : 0);
+  const { t0, rate } = E.slowWin;
+  const s0 = t0 - E.slowOffset;
+  if (tau <= s0) return tau + E.slowOffset;
+  return t0 + (tau - s0) / Math.max(0.05, rate);
 }
 
 // ---------- rats ----------
 export function addRat(o) {
-  const r = { id: E.rats.length, depth: 0, coins: 1, segs: [], dmg: [], hp0: RULES.ratHP, meleeAt: Infinity, slot: -1, ...o };
+  const r = { id: E.rats.length, stage: E.stage || 1, depth: 0, coins: 1, segs: [], dmg: [], hp0: RULES.ratHP, meleeAt: Infinity, slot: -1, ...o };
   r.landT = r.burst + LEAP;
   E.rats.push(r);
   cue(r.burst, 'burst', { pan: 0.45 }); cue(r.burst + 0.12, 'squeak', { pan: 0.45 }); cue(r.landT, 'land', { pan: 0.4 });
@@ -95,7 +125,7 @@ export function addRat(o) {
 // ---------- goblins (Beat 5): over the dry-stone wall, one at a time ----------
 // tel: the hedge rustles and a helm peeks over the coping; leap: the vault itself
 export function addGoblin(o) {
-  const g = { id: E.rats.length, gob: true, depth: 0, coins: 5, segs: [], dmg: [], hp0: RULES.ratHP, meleeAt: Infinity, slot: -1, ...o };
+  const g = { id: E.rats.length, stage: E.stage || 1, gob: true, depth: 0, coins: 5, segs: [], dmg: [], hp0: RULES.ratHP, meleeAt: Infinity, slot: -1, ...o };
   g.landT = g.leap + GOB_LEAP;
   E.rats.push(g);
   cue(g.tel, 'hedge', { pan: 0.3 });
@@ -104,9 +134,16 @@ export function addGoblin(o) {
   cue(g.landT + 0.09, 'clang', { v: 0.35, pan: 0.35 });                // the helm rattles down over his ears
   return g;
 }
-export const goblins = () => E.rats.filter(r => r.gob);
+export function addBeetle(o) {
+  const b = { id: E.rats.length, stage: E.stage || 1, beetle: true, depth: 0, coins: 3, mat: 'Fire Beetle Gland', segs: [], dmg: [], hp0: 9, meleeAt: Infinity, slot: -1, ...o };
+  b.landT = b.burst + LEAP;
+  E.rats.push(b);
+  cue(b.burst, 'burst', { pan: 0.45 }); cue(b.landT, 'land', { pan: 0.4 });
+  return b;
+}
+export const goblins = () => E.rats.filter(r => !r.archived && r.gob);
 // any foe (rat or goblin) currently in the hero's face — gates the out-of-combat regen
-export function engagedFoes(s) { return E.rats.some(r => r.dieAt === undefined && r.meleeAt <= s + 0.5 && s >= r.landT); }
+export function engagedFoes(s) { return E.rats.some(r => !r.archived && r.dieAt === undefined && r.meleeAt <= s + 0.5 && s >= r.landT); }
 // where a rat's body is at time s (before hit reactions and lunges)
 export function baseX(r, s) {
   let x = r.landX;
@@ -142,16 +179,17 @@ function killRat(r, at, src) {
   if (launch) r.launched = true;
   r.popAt = launch ? at + HS + 0.9 : at + (src.kind === 'swing' ? HS : 0) + 0.14;   // a launched goblin "pops" when he becomes the star
   r.killIdx = E.kills++;
-  for (const b of E.bites) if (b.rat === r.id && b.at > at) b.void = true;   // a dead rat bites no one
+  for (const b of E.bites) if (b.rat === r.id && b.at > at && (!b.ranged || b.fromAt > at)) b.void = true;   // a dead foe bites no one (already-thrown daggers keep flying)
   retarget(r, at);
   // loot: copper arcs out. Beat 1's coins fly to the purse on their own; a rat flagged
   // holdCoins drops coins that rest on the ground for the player to tap (Beat 3).
   const cspawn = launch ? at + HS + 0.06 : r.popAt;          // a launched goblin's purse spills as he lifts off
-  const coinVal = Math.max(1, Math.round((r.coinV || 1) * (E.goldFind || 1)));
+  const bld = (E.stage || 1) >= 2 ? (E.build?.bonuses || {}) : {};
+  const coinVal = r.turnip ? 1 : Math.max(1, Math.round((r.coinV || 1) * (E.goldFind || 1) * (1 + (bld.goldBonus || 0))));
   for (let j = 0; j < r.coins; j++) {
     const spread = (j - (r.coins - 1) / 2) * 10 + (hash(j, r.id * 7 + 3) - 0.5) * 4;
     const arc = 0.36 + j * 0.05;
-    const c = { rat: r.id, j, ox: r.deathX + 8, depth: r.depth, spread, h: 20 + hash(j, r.id + 11) * 10, spawn: cspawn, land: cspawn + arc, gob: !!r.gob, v: coinVal };
+    const c = { rat: r.id, stage: r.stage || E.stage || 1, j, ox: r.deathX + 8, depth: r.depth, spread, h: 20 + hash(j, r.id + 11) * 10, spawn: cspawn, land: cspawn + arc, gob: !!r.gob, turnip: !!r.turnip, v: coinVal };
     if (r.holdCoins) { c.hold = true; c.expire = Infinity; }                // beat3 arms the 5 s countdown once the fight is over
     else {
       c.fly = r.popAt + 0.72 + j * 0.13; c.arrive = c.fly + 0.58;
@@ -161,8 +199,18 @@ function killRat(r, at, src) {
     E.coins.push(c);
     cue(c.land, 'tink', { i: j });
   }
+  if (r.mat) {
+    E.matDrops.push({
+      id: E.matDrops.length, name: r.mat, stage: r.stage || E.stage || 1,
+      ox: r.deathX + 8, depth: r.depth, spread: 14, h: 18,
+      spawn: cspawn, land: cspawn + 0.34, collect: cspawn + 0.9,
+    });
+  }
   // the XP mote — for a launched goblin it spills out of the ding-star itself
-  const xp = r.snik ? RULES.snikXP : r.gob ? RULES.gobXP : RULES.ratXP;
+  const xp = r.snik ? RULES.snikXP
+    : (r.stage || 1) === 3 ? (r.beetle ? RULES_XP.s3BeetleXP : r.gob ? RULES_XP.s3GobXP : RULES_XP.s3RatXP)
+    : (r.stage || 1) === 2 ? (r.beetle ? RULES_XP.s2BeetleXP : RULES_XP.s2GobXP)
+    : r.gob ? RULES.gobXP : RULES.ratXP;
   r.xp = xp;
   const prevXP = E.orbs.reduce((acc, q) => acc + q.xp, 0);
   const o = launch
@@ -188,11 +236,12 @@ function killRat(r, at, src) {
 
 // ---------- the hero's swings ----------
 export function addSwing(w) {
-  w.total = w.roll + RULES.toHit;
+  const bld = (E.stage || 1) >= 2 ? (E.build?.bonuses || {}) : {};
+  w.total = w.roll + RULES.toHit + (bld.toHitBonus || 0);
   w.crit = w.roll >= (E.critRange || 20); w.fumble = w.roll === 1;
   w.hit = !w.fumble && (w.crit || w.total >= RULES.ratAC);
   const critMult = w.crit ? (1 + (E.critBonus || 0)) : 1;
-  w.dmg = w.hit ? Math.max(1, Math.round((w.dice.reduce((a, b) => a + b, 0) + RULES.dmgBonus) * E.dmgMult * critMult)) : 0;
+  w.dmg = w.hit ? Math.max(1, Math.round((w.dice.reduce((a, b) => a + b, 0) + RULES.dmgBonus + (bld.dmgBonus || 0)) * E.dmgMult * critMult)) : 0;
   w.linger = w.linger ?? (w.hit ? 0.95 : 1.05);
   E.swings.push(w);
   if (w.hit) { E.hits.push(w.at); E.hits.sort((a, b) => a - b); }
@@ -202,7 +251,7 @@ export function addSwing(w) {
 }
 // who the hero should hit: the focus target if it's in reach, otherwise the nearest rat in reach
 export function chooseTarget(now, at) {
-  const ok = r => r.dieAt === undefined && r.meleeAt <= at + 0.02 && now >= r.landT;
+  const ok = r => !r.archived && r.dieAt === undefined && r.meleeAt <= at + 0.02 && now >= r.landT;
   const f = focusAt(now);
   if (f >= 0 && ok(E.rats[f])) return f;
   let best = -1, bx = 1e9;
@@ -223,8 +272,11 @@ function retarget(r, at) {
   }
 }
 
-// ---------- rat bites ----------
-export function heroMaxHP() { return Math.max(1, Math.round(RULES.heroHP * (E.hpMult || 1)) + (E.hpBonus || 0)); }
+// ---------- rat bites & hero vitality ----------
+export function heroMaxHP() {
+  const lvBonus = Math.max(0, (E.level || 1) - 1) * (RULES_XP.heroLvHP || 8);
+  return Math.max(1, Math.round((RULES.heroHP + lvBonus) * (E.hpMult || 1)) + (E.hpBonus || 0));
+}
 export function heroHP(s) {
   const maxHP = heroMaxHP();
   let hp = maxHP;
@@ -232,21 +284,44 @@ export function heroHP(s) {
   for (const h of E.heals) if (h.at <= s) hp = Math.min(maxHP, hp + h.amt);
   return hp;
 }
+export function hasPackTactics(r, s) {
+  if (!r || r.archived || (r.stage || 1) !== 1 || r.gob || r.beetle || r.dieAt !== undefined) return false;
+  if (!(r.meleeAt <= s + 0.05 && s >= r.landT)) return false;
+  let allies = 0;
+  for (const o of E.rats) {
+    if (!o.archived && (o.stage || 1) === 1 && !o.gob && !o.beetle && o.dieAt === undefined && o.meleeAt <= s + 0.05 && s >= o.landT) allies++;
+  }
+  return allies >= 2;
+}
+export function addThrownDagger({ fromAt, at, rat, fromX, toX, depth = 0, roll, dmg }) {
+  const bite = addBite({ at, rat, roll, dmg, ranged: true, fromAt });
+  E.projectiles.push({ fromAt, at, rat, fromX, toX, depth, bite });
+  cue(fromAt, 'swing');
+  return bite;
+}
 export function addBite(b) {
-  b.hit = b.roll !== 1 && (b.roll === 20 || b.roll + RULES.ratToHit >= RULES.heroAC);
+  const bld = (E.stage || 1) >= 2 ? (E.build?.bonuses || {}) : {};
+  const ac = RULES.heroAC + (bld.acBonus || 0);
+  b.hit = b.roll !== 1 && (b.roll === 20 || b.roll + RULES.ratToHit >= ac);
   if (b.hit) {
     if (E.dmgReduce) b.dmg = Math.max(1, b.dmg - E.dmgReduce);
     const hp = heroHP(b.at);
-    if (hp - b.dmg < 1) { b.dmg = Math.max(0, hp - 1); b.ward = true; }   // Mystra's patience
+    if (mystraActiveForStage(E.stage || 1) && hp - b.dmg < 1) {
+      b.dmg = Math.max(0, hp - 1);
+      b.ward = true;
+      E.wardAt = Math.max(E.wardAt ?? -9, b.at);
+    }   // Mystra's patience (Stages 1–4)
   }
   E.bites.push(b);
-  b.cues = [cue(b.at - 0.03, 'bite')];
+  b.cues = [cue(b.ranged ? b.fromAt : b.at - 0.03, b.ranged ? 'whiff' : 'bite')];
   if (b.hit) b.cues.push(cue(b.at + 0.01, b.ward ? 'ward' : 'hurt'));
   return b;
 }
 
 // ---------- Command Strikes, heals, focus ----------
 export function addStrike(cs) {
+  const cmdMult = 1 + ((E.stage || 1) >= 2 ? (E.build?.bonuses?.cmdBonus || 0) : 0);
+  cs.dmg = Math.max(1, Math.round(cs.dmg * cmdMult));
   E.strikes.push(cs);
   cue(cs.at - 0.05, 'shout', { i: cs.n }); cue(cs.at, 'cs', { i: cs.n });
   damageRat(E.rats[cs.rat], cs.at, cs.dmg, { kind: 'cs', cs });
@@ -269,20 +344,20 @@ function focusEntry(s) { let e = null; for (const x of E.focus) { if (x.at > s) 
 // ---------- Beat 1: the scripted fight ----------
 function loadBeat1() {
   const r0 = addRat({ burst: 22.0, landX: 420, coins: 2 });
-  r0.meleeAt = moveRat(r0, r0.landT, SLOT[0], { speed: 150 }); r0.slot = 0;
+  r0.meleeAt = moveRat(r0, r0.landT, SLOT[0], { dur: 1.8 }); r0.slot = 0;
   const r1 = addRat({ burst: 22.27, landX: 440, coins: 3 });
-  moveRat(r1, r1.landT, SLOT[0] + 56, { speed: 150 });
-  r1.meleeAt = moveRat(r1, 27.0, SLOT[0], { dur: 0.5, kind: 'dash' }); r1.slot = 0;
+  moveRat(r1, r1.landT, SLOT[0] + 56, { dur: 1.2 });
+  r1.meleeAt = moveRat(r1, 27.0, SLOT[0], { dur: 0.6, kind: 'dash' }); r1.slot = 0;
   cue(23.0, 'squeak', { pan: 0.3 }); cue(27.05, 'squeak', { pan: 0.3 }); cue(27.25, 'squeak', { pan: 0.25 });
   cue(CB.draw, 'draw');
-  // the hero's rounds: pips fill from drawing the sword toward each swing
+  // the hero's rounds: pips fill once an alive rat is in melee reach
   const SW = [
     { at: 25.9, rat: 0, roll: 16, dice: [4, 5], linger: 1.1 },   // the first swing always hits (≥14)
     { at: 28.3, rat: 1, roll: 4, dice: [], linger: 2.0 },         // …and a low roll misses: "every swing is a roll"
     { at: 30.7, rat: 1, roll: 17, dice: [5, 2], linger: 1.3 },
   ];
-  [{ at: 25.2, rat: 0, roll: 8, dmg: 2 }, { at: 27.95, rat: 1, roll: 14, dmg: 3 }, { at: 29.5, rat: 1, roll: 6, dmg: 1 }].forEach(addBite);
-  let prev = CB.draw - 0.2;
+  [{ at: 25.2, rat: 0, roll: 8, dmg: 2 }, { at: 27.95, rat: 1, roll: 14, dmg: 2 }, { at: 29.5, rat: 1, roll: 6, dmg: 1 }].forEach(addBite);
+  let prev = Math.max(CB.draw - 0.2, r0.meleeAt);
   for (const w of SW) {
     addSwing(w); w.applied = true;
     E.rounds.push({ t0: prev, full: w.at, at: w.at });
@@ -302,20 +377,31 @@ resetCombat();
 // ---------- HUD numbers ----------
 export function hudState(t) {
   const s = warp(t);
+  const stg = E.stage || 1;
+  const def = stageDef(stg);
   const hpMax = heroMaxHP();
-  let hp = hpMax, hpAt = -9, healAt = -9, hpLost = 0;
-  for (const b of E.bites) if (!b.void && b.hit && b.dmg > 0 && b.at <= s) { hp -= b.dmg; if (b.at >= hpAt) { hpAt = b.at; hpLost = b.dmg; } }
+  let hp = hpMax, hpAt = -9, healAt = -9, hpLost = 0, wardAt = -9;
+  for (const b of E.bites) if (!b.void && b.hit && b.at <= s) {
+    if (b.dmg > 0) { hp -= b.dmg; if (b.at >= hpAt) { hpAt = b.at; hpLost = b.dmg; } }
+    if (b.ward) wardAt = Math.max(wardAt, b.at);
+  }
   for (const h of E.heals) if (h.at <= s) { hp = Math.min(hpMax, hp + h.amt); healAt = Math.max(healAt, h.at); }
   let cp = 0, cpAt = -9; for (const c of E.coins) if (c.arrive !== undefined && s >= c.arrive) { cp += (c.v || 1); cpAt = Math.max(cpAt, c.arrive); }
   cp = Math.max(0, cp - E.spent);                          // purchases (Beat 6) spend out of the purse
   let xp = 0, xpAt = -9; for (const o of E.orbs) if (s >= o.arrive) { xp += o.xp; xpAt = Math.max(xpAt, o.arrive); }
-  let quota = 0, quotaAt = -9; for (const r of E.rats) if (r.popAt !== undefined && s >= r.popAt + 0.25) { quota++; quotaAt = Math.max(quotaAt, r.popAt + 0.25); }
+  let quota = 0, quotaAt = -9; for (const r of E.rats) if ((r.stage || 1) === stg && r.popAt !== undefined && s >= r.popAt + 0.25) { quota++; quotaAt = Math.max(quotaAt, r.popAt + 0.25); }
   // the hero's round: pips fill toward each swing (and stay full while he waits for something to hit)
   let round = 0, swingAt = -9, combat = false;
   for (const rd of E.rounds) if (s >= rd.t0 && s < rd.at) { round = s < rd.full ? inv(rd.t0, rd.full, s) : 1; combat = true; }
   for (const w of E.swings) if (w.at <= s && !w.void) swingAt = Math.max(swingAt, w.at);
   if (s - swingAt < 0.3) combat = true;
-  return { hp, hpMax, hpAt, hpLost, healAt, cp, cpAt, xp, xpAt, quota, quotaAt, round, swingAt, combat, s, level: E.level || 1, stage: E.stage || 1 };
+  const lv = E.level || 1;
+  const surgeRemain = surgeCooldownLeft(E.surgeUsedAt, s, RULES_XP.shortRestSec);
+  const surgeReady = lv >= 2 && surgeRemain <= 0;
+  const surgeFrac = lv < 2 ? 0 : surgeRemain <= 0 ? 1 : clamp(1 - surgeRemain / RULES_XP.shortRestSec);
+  return { hp, hpMax, hpAt, hpLost, healAt, wardAt, cp, cpAt, xp, xpAt, xpFrac: xpBandProgress(xp, lv),
+    quota, quotaMax: def.quota, quotaAt, round, swingAt, combat, s, level: lv, stage: stg, stageName: def.name,
+    surgeReady, surgeRemain, surgeFrac, potions: E.potions || 0, tacticalMind: !!E.tacticalMind };
 }
 
 // ---------- the hero ----------
@@ -331,26 +417,30 @@ export function heroCombat(t) {
   for (const cs of E.strikes) { const d = s - cs.at + 0.05; if (d >= 0 && d < 0.14) dx = Math.max(dx, Math.round(2 * (1 - d / 0.14))); }  // a lean into the shout
   for (const b of E.bites) if (b.hit && !b.void && s >= b.at && s < b.at + 0.22) { mode = 'hurt'; dx = -Math.round(3 * (1 - (s - b.at) / 0.22)); }
   for (const w of E.swings) {
+    if (w.void) continue;
     const d = s - w.at;
-    if (d < -0.3 || d > 0.8) continue;
+    if (d < -0.3 || d > 0.85) continue;
     const L = w.lunge || 0;                                   // a step in toward a rat in the back slot
     if (d >= -0.26 && d < -0.05) { mode = 'windup'; dx = -1 + Math.round(L * easeOut((d + 0.26) / 0.21)); }
-    else if (d >= -0.05 && d < 0.14) { mode = 'strike'; dx = 5 + L; }
-    else if (d >= 0.14 && d < 0.44) { mode = w.fumble && d > 0.22 ? 'hurt' : 'follow'; dx = (w.fumble ? 5 + Math.round(Math.sin((d - 0.14) * 40)) : 5) + L; }
+    else if (d >= -0.05 && d < 0.08) { mode = 'strike'; dx = 5 + L; }
+    else if (w.fumble && d >= 0.08 && d < 0.58) { mode = 'hurt'; dx = Math.round(Math.sin((d - 0.08) * 38) * 2.5) + L; }
+    else if (d >= 0.08 && d < 0.44) { mode = 'follow'; dx = 5 + L; }
     else if (d >= 0.44 && d < 0.74) dx = Math.round((5 + L) * (1 - easeOut((d - 0.44) / 0.3)));
   }
   return { x: CB.x1, dx, walking: false, mode, frame: Math.floor(s / 0.9) % 2 };
 }
 export function heroAdvanceSteps() { const out = []; for (let s = CB.walk[0]; s < CB.walk[1]; s += 4 / 12) out.push({ t: s, x: lerp(CB.x0, CB.x1, inv(CB.walk[0], CB.walk[1], s)) + HERO_CX }); return out; }
 
-// ---------- rat poses ----------
-let RAT = null, RSIL = null, RGLOW = null, D20 = null, SPOT = null, COIN = null, SHOUT = null;
-let GOB = null, GSIL = null, GGLOW = null, SNIK = null, SSIL = null, SGLOW = null;
+// ---------- foe poses ----------
+let RAT = null, RSIL = null, RGLOW = null, RPACK = null, D20 = null, SPOT = null, COIN = null, TURNIP = null, GLAND = null, DAGGER = null, SHOUT = null;
+let GOB = null, GSIL = null, GGLOW = null, SNIK = null, SSIL = null, SGLOW = null, TGOB = null, TGSIL = null, TGGLOW = null;
+let BEETLE = null, BSIL = null, BGLOW = null;
 export function buildCombat() {
   RAT = buildRat();
   const each = fn => ({ run: RAT.run.map(fn), crouch: fn(RAT.crouch), bite: fn(RAT.bite), hit: fn(RAT.hit) });
   RSIL = each(f => silhouette(f));
   RGLOW = each(f => silhouette(f, '#ffd45a'));
+  RPACK = each(f => silhouette(f, '#ff8c2e'));
   RAT.flash = silhouette(RAT.hit, '#ffffff');
   GOB = buildGoblin();
   const geach = fn => ({ run: GOB.run.map(fn), leap: fn(GOB.leap), crouch: fn(GOB.crouch), bite: fn(GOB.bite), hit: fn(GOB.hit) });
@@ -362,20 +452,34 @@ export function buildCombat() {
   SSIL = seach(f => silhouette(f));
   SGLOW = seach(f => silhouette(f, '#ffd45a'));
   SNIK.flash = silhouette(SNIK.hit, '#ffffff');
+  TGOB = buildGoblin(false, true);                      // Stage 2: turnip-carrying Goblin Minions
+  const tgeach = fn => ({ run: TGOB.run.map(fn), leap: fn(TGOB.leap), crouch: fn(TGOB.crouch), bite: fn(TGOB.bite), hit: fn(TGOB.hit) });
+  TGSIL = tgeach(f => silhouette(f));
+  TGGLOW = tgeach(f => silhouette(f, '#ffd45a'));
+  TGOB.flash = silhouette(TGOB.hit, '#ffffff');
+  BEETLE = buildBeetle();
+  const beach = fn => ({ run: BEETLE.run.map(fn), crouch: fn(BEETLE.crouch), bite: fn(BEETLE.bite), hit: fn(BEETLE.hit) });
+  BSIL = beach(f => silhouette(f));
+  BGLOW = beach(f => silhouette(f, '#ffd45a'));
+  BEETLE.flash = silhouette(BEETLE.hit, '#ffffff');
   D20 = buildD20();
   SPOT = buildSpot(34, 70, 1.15);
   COIN = buildCoin();
+  TURNIP = buildTurnip();
+  GLAND = buildGland();
+  DAGGER = buildThrownDagger();
   SHOUT = Object.fromEntries(['HA!', 'HUP!', 'HAH!', 'OI!'].map(w => [w, buildShout(w)]));
 }
 
 export function ratState(r, s, og) {
   if (s < r.burst || (r.popAt !== undefined && s >= r.popAt)) return null;
-  const hx = BURROW.x - 4, hy = BURROW.y + 1 + og;
-  if (s < r.landT) {                                       // the leap out of the burrow
+  const fromBarrel = r.spawnX !== undefined;
+  const hx = fromBarrel ? r.spawnX : (BURROW.x - 4), hy = fromBarrel ? ratGroundY(hx, og, r.depth) : (BURROW.y + 1 + og);
+  if (s < r.landT) {                                       // the leap out of the burrow or cider barrels
     const k = (s - r.burst) / LEAP;
     const gy = ratGroundY(r.landX, og, r.depth);
-    return { x: lerp(hx + 8, r.landX, k), y: lerp(hy + 6, gy, easeIn(k)) - Math.sin(Math.PI * k) * 22, img: 'run', fr: k < 0.5 ? 0 : 2,
-      emerge: k < 0.35 ? hy + 1 : null, air: Math.sin(Math.PI * k), gy };
+    return { x: lerp(hx + (fromBarrel ? 0 : 8), r.landX, k), y: lerp(fromBarrel ? hy - 6 : hy + 6, gy, easeIn(k)) - Math.sin(Math.PI * k) * (fromBarrel ? 15 : 22), img: 'run', fr: k < 0.5 ? 0 : 2,
+      emerge: !fromBarrel && k < 0.35 ? hy + 1 : null, air: Math.sin(Math.PI * k), gy };
   }
   const b = baseX(r, s);
   let img = 'run', fr = 3, dx = 0, lift = 0, flash = 0;
@@ -424,21 +528,77 @@ export function ratState(r, s, og) {
 const ratImg = st => st.img === 'run' ? RAT.run[st.fr] : RAT[st.img];
 const pick = (set, st) => st.img === 'run' ? set.run[st.fr] : set[st.img];
 
+// ---------- giant fire beetle poses ----------
+export function beetleState(b, s, og) {
+  if (s < b.burst || (b.popAt !== undefined && s >= b.popAt)) return null;
+  if (s < b.landT) {
+    const k = (s - b.burst) / LEAP;
+    const gy = ratGroundY(b.landX, og, b.depth);
+    return { x: lerp(b.landX + 36, b.landX, k), y: gy - Math.sin(Math.PI * k) * 14, img: 'run', fr: k < 0.5 ? 0 : 2, air: Math.sin(Math.PI * k), gy };
+  }
+  const mv = baseX(b, s);
+  let img = 'run', fr = mv.moving ? Math.floor(s * 14 + b.id) % 4 : (Math.floor(s * 4 + b.id) % 2 ? 0 : 2), dx = 0, lift = 0, flash = 0;
+  for (const bt of E.bites) if (bt.rat === b.id && !bt.void) {
+    const d = s - bt.at; if (d < -0.25 || d > 0.32) continue;
+    const reach = b.slot === 1 ? 15 : 8;
+    if (d >= -0.22 && d < -0.04) { img = 'crouch'; dx = 2; }
+    else if (d >= -0.04 && d < 0.1) { img = 'bite'; dx = -reach; }
+    else if (d >= 0.1 && d < 0.3) { img = 'run'; fr = 1; dx = Math.round(-reach * (1 - (d - 0.1) / 0.2)); }
+  }
+  for (const w of E.swings) if (w.rat === b.id && !w.void) {
+    const d = s - w.at; if (d < -0.15 || d > 0.6) continue;
+    if (!w.hit && d >= -0.12 && d < 0.36) {
+      const k = (d + 0.12) / 0.48;
+      img = k < 0.15 || k > 0.85 ? 'crouch' : 'run'; fr = 0;
+      dx = Math.round(9 * Math.sin(Math.PI * k)); lift = Math.round(5 * Math.sin(Math.PI * Math.min(1, k * 1.3)));
+    }
+    if (w.hit && d >= 0) {
+      const dead = b.dieAt === w.at;
+      const kb = dead ? 8 : 5, dur = dead ? 0.2 : 0.3;
+      if (dead || d < dur + 0.1) {
+        img = 'hit'; dx = Math.round(kb * (dead ? easeOut(Math.min(1, d / 0.2)) : Math.sin(Math.PI * Math.min(1, d / dur)))); lift = Math.round(3 * Math.sin(Math.PI * Math.min(1, d / 0.21)));
+        if (d < HS) flash = 0.8;
+      }
+    }
+  }
+  for (const cs of E.strikes) if (cs.rat === b.id) {
+    const d = s - cs.at; if (d < 0 || d > 0.16) continue;
+    img = 'hit'; dx += Math.round(4 * Math.sin(Math.PI * d / 0.16)); if (d < 0.05) flash = 0.65;
+  }
+  const x = mv.x + dx, gy = ratGroundY(x, og, b.depth);
+  return { x, y: gy - lift, img, fr, air: lift / 10, gy, flash };
+}
+const beetleImg = st => st.img === 'run' ? BEETLE.run[st.fr] : BEETLE[st.img];
+
 // ---------- goblin poses ----------
-// a goblin's approach: peek over the coping → vault the wall → dash to his slot → stab
+// a goblin's approach: peek over the coping -> vault the wall (or sprint out of Hedrun's barn door) -> dash to slot -> stab
 export function gobState(g, s, og) {
   if (s < g.tel || (g.popAt !== undefined && s >= g.popAt)) return null;
   if (g.launched && s >= g.dieAt + HS) return null;                     // the sky has him now (the hit-flash holds him through the freeze)
-  if (s < g.leap) {                                                        // the telegraph: helm and eyes over the wall
-    const duck = s > g.leap - 0.14 ? 3 : 0;                                // a quick duck, then SPRING
-    return { peek: true, x: g.wallX, y: WALL_TOP - 6 + Math.round(Math.sin(s * 7) * 1) + duck, gy: WALL_TOP, img: 'peek', fr: 0, air: 0 };
-  }
-  const gy0 = ratGroundY(g.landX, og, g.depth);
-  if (s < g.landT) {                                                       // the vault, helm lifting clean off his head
-    const k = (s - g.leap) / GOB_LEAP;
-    const y0 = WALL_TOP - 8;
-    return { x: lerp(g.wallX, g.landX, easeOut(k)), y: lerp(y0, gy0, easeIn(k)) - Math.sin(Math.PI * k) * 30,
-      img: 'leap', fr: 0, air: Math.sin(Math.PI * k), gy: gy0, over: k < 0.55 };
+  if (g.fromBarn) {
+    const doorGy = ratGroundY(g.wallX, og, g.depth);
+    if (s < g.leap) {
+      const k = clamp((s - g.tel) / Math.max(0.1, g.leap - g.tel));
+      return { peek: true, x: lerp(g.wallX + 6, g.wallX - 4, k), y: 263 + og, gy: doorGy, img: 'peek', fr: 0, air: 0 };
+    }
+    const gy0 = ratGroundY(g.landX, og, g.depth);
+    if (s < g.landT) {
+      const k = (s - g.leap) / GOB_LEAP;
+      return { x: lerp(g.wallX, g.landX, easeOut(k)), y: lerp(doorGy - 4, gy0, k) - Math.sin(Math.PI * k) * 9,
+        img: 'run', fr: Math.floor(s * 16 + g.id) % 4, air: Math.sin(Math.PI * k) * 0.4, gy: gy0 };
+    }
+  } else {
+    if (s < g.leap) {                                                        // the telegraph: helm and eyes over the wall
+      const duck = s > g.leap - 0.14 ? 3 : 0;                                // a quick duck, then SPRING
+      return { peek: true, x: g.wallX, y: WALL_TOP - 6 + Math.round(Math.sin(s * 7) * 1) + duck, gy: WALL_TOP, img: 'peek', fr: 0, air: 0 };
+    }
+    const gy0 = ratGroundY(g.landX, og, g.depth);
+    if (s < g.landT) {                                                       // the vault, helm lifting clean off his head
+      const k = (s - g.leap) / GOB_LEAP;
+      const y0 = WALL_TOP - 8;
+      return { x: lerp(g.wallX, g.landX, easeOut(k)), y: lerp(y0, gy0, easeIn(k)) - Math.sin(Math.PI * k) * 30,
+        img: 'leap', fr: 0, air: Math.sin(Math.PI * k), gy: gy0, over: k < 0.55 };
+    }
   }
   const b = baseX(g, s);
   let img = 'run', fr = 3, dx = 0, lift = 0, flash = 0;
@@ -450,7 +610,12 @@ export function gobState(g, s, og) {
     if (g.slot >= 2) { const ph = (s * 0.9 + g.id * 0.37) % 1.4; if (ph < 0.24) { lift = Math.round(3 * Math.sin(Math.PI * ph / 0.24)); fr = 1; } }
     if (g.wary && !(g.aggroAt <= s)) { const c2 = Math.floor(s / 1.7), ph = s / 1.7 - c2; if (hash(c2, g.id * 31 + 5) > 0.6 && ph < 0.2) img = 'crouch'; }
   }
-  for (const bt of E.bites) if (bt.rat === g.id && !bt.void) {
+  if (g.throwAt !== undefined) {
+    const dt = s - g.throwAt;
+    if (dt >= -0.16 && dt < 0) { img = 'crouch'; dx = 2; }
+    else if (dt >= 0 && dt < 0.14) { img = 'bite'; dx = -4; }
+  }
+  for (const bt of E.bites) if (bt.rat === g.id && !bt.void && !bt.ranged) {
     const d = s - bt.at; if (d < -0.25 || d > 0.34) continue;
     const reach = g.slot === 1 ? 14 : 8;
     if (d >= -0.22 && d < -0.04) { img = 'crouch'; dx = 2; }               // the wind-up: dagger pulled back
@@ -478,16 +643,16 @@ export function gobState(g, s, og) {
     img = 'hit'; dx += Math.round(4 * Math.sin(Math.PI * d / 0.16)); if (d < 0.05) flash = 0.65;
   }
   const x = b.x + dx, gy = ratGroundY(x, og, g.depth);
-  return { x, y: gy - lift, img, fr, air: lift / 10, gy, flash, snik: !!g.snik };
+  return { x, y: gy - lift, img, fr, air: lift / 10, gy, flash, snik: !!g.snik, turnip: !!g.turnip };
 }
-const gobImg = st => { const set = st.snik ? SNIK : GOB; return st.img === 'run' ? set.run[st.fr] : set[st.img]; };
+const gobImg = st => { const set = st.snik ? SNIK : st.turnip ? TGOB : GOB; return st.img === 'run' ? set.run[st.fr] : set[st.img]; };
 
 // which foe (if any) is under a point on the native 640×360 grid
 export function ratAtPoint(gx, gy, s, og, filter = () => true) {
-  const cands = E.rats.filter(r => filter(r) && ratAlive(r, s)).sort((a, b) => b.depth - a.depth);
+  const cands = E.rats.filter(r => !r.archived && filter(r) && ratAlive(r, s)).sort((a, b) => b.depth - a.depth);
   for (const r of cands) {
-    const st = (r.gob ? gobState : ratState)(r, s, og); if (!st || st.peek) continue;
-    const bx = r.gob ? [-15, 13, -38, 4] : [-26, 22, -26, 5];
+    const st = (r.gob ? gobState : r.beetle ? beetleState : ratState)(r, s, og); if (!st || st.peek) continue;
+    const bx = r.gob ? [-15, 13, -38, 4] : r.beetle ? [-21, 19, -24, 5] : [-26, 22, -26, 5];
     if (gx >= st.x + bx[0] && gx <= st.x + bx[1] && gy >= st.gy + bx[2] && gy <= st.gy + bx[3]) return r.id;
   }
   return -1;
@@ -517,11 +682,12 @@ const FURC = ['#2f1d14', '#5c3823', '#76492c', '#8e5d38', '#a87446', '#c08e5c'];
 const DIRT = ['#4a311e', '#6b4a2c', '#8c6a42', '#a98654'];
 function burstFX(ctx, s, r, og) {
   const d = s - r.burst; if (d < 0 || d > 1.0) return;
-  const hx = BURROW.x - 4, hy = BURROW.y + 1 + og;
+  const fromBarrel = r.spawnX !== undefined;
+  const hx = fromBarrel ? r.spawnX : (BURROW.x - 4), hy = fromBarrel ? ratGroundY(hx, og, r.depth) : (BURROW.y + 1 + og);
   if (d < 0.5) for (let i = 0; i < 6; i++) {
     const k = d / 0.5, a = -Math.PI * (0.15 + 0.7 * i / 5);
     const cx = hx + Math.cos(a) * (4 + 12 * easeOut(k)), cy = hy - 2 + Math.sin(a) * (3 + 7 * easeOut(k));
-    ctx.globalAlpha = 0.55 * (1 - k); pxEllipse(ctx, cx, cy, 2 + 4 * k, 1.5 + 3 * k, i % 2 ? '#b3946c' : '#8c6f4e');
+    ctx.globalAlpha = 0.55 * (1 - k); pxEllipse(ctx, cx, cy, 2 + 4 * k, 1.5 + 3 * k, fromBarrel ? '#e29828' : (i % 2 ? '#b3946c' : '#8c6f4e'));
   }
   ctx.globalAlpha = 1;
   for (let i = 0; i < 16; i++) {
@@ -534,6 +700,17 @@ function burstFX(ctx, s, r, og) {
     const vx = (i - 1) * 26, vy = -55 - i * 6; const x = hx + vx * d, y = hy + vy * d + 130 * d * d; if (y > hy + 3) continue;
     const a = d * 14 + i; ctx.fillStyle = '#6a9a46';
     for (let k = 0; k < 3; k++) ctx.fillRect(Math.round(x + Math.cos(a) * k), Math.round(y + Math.sin(a) * k), 1, 1);
+  }
+}
+function beetleBurstFX(ctx, s, b, og) {
+  const d = s - b.burst; if (d < 0 || d > 0.7) return;
+  const hx = b.landX + 36, hy = ratGroundY(hx, og, b.depth);
+  for (let i = 0; i < 12; i++) {
+    const vx = (hash(i, b.burst * 13) - 0.5) * 44, vy = -28 - hash(i, b.burst * 13 + 1) * 32;
+    const x = hx + vx * d, y = hy + vy * d + 95 * d * d;
+    if (y > hy + 2) continue;
+    ctx.fillStyle = i % 4 === 0 ? '#ff9628' : DIRT[i % 4];
+    ctx.fillRect(Math.round(x), Math.round(y), 1, 1);
   }
 }
 function landDust(ctx, s, x, gy, at) {
@@ -561,7 +738,7 @@ function smear(ctx, s, w, px, py) {
   const lead = lerp(-100, 18, clamp((d + 0.045) / 0.06)) * Math.PI / 180;
   const span = d < 0.02 ? 1.75 : 1.75 * (1 - (d - 0.02) / 0.11);
   if (span <= 0.05) return;
-  const R0 = 27, R1 = 41, gold = w.crit;
+  const R0 = w.surge ? 25 : 27, R1 = w.surge ? 44 : 41, gold = w.crit || w.surge;
   py += 9;
   for (let y = -R1; y <= R1; y++) for (let x = -R1; x <= R1; x++) {
     const r = Math.hypot(x, y); if (r < R0 || r > R1) continue;
@@ -570,8 +747,12 @@ function smear(ctx, s, w, px, py) {
     const band = 1 - Math.abs(edge - 0.62) * 1.6;
     const v = Math.pow(f, 1.6) * (0.35 + 0.65 * band);
     if (v < 0.1 + bayer(x + 64, y + 64) * 0.2) continue;
-    ctx.fillStyle = v > 0.7 ? '#ffffff' : v > 0.45 ? (gold ? '#ffe98a' : '#fff3cf') : v > 0.25 ? (gold ? '#ffc23a' : '#ffd88a') : (gold ? '#e8902a' : '#f0a656');
-    ctx.globalAlpha = v > 0.45 ? 1 : 0.7;
+    if (w.surge) {
+      ctx.fillStyle = v > 0.7 ? '#ffffff' : v > 0.45 ? '#b8f4ff' : v > 0.25 ? '#ffdf64' : '#e8962a';
+    } else {
+      ctx.fillStyle = v > 0.7 ? '#ffffff' : v > 0.45 ? (gold ? '#ffe98a' : '#fff3cf') : v > 0.25 ? (gold ? '#ffc23a' : '#ffd88a') : (gold ? '#e8902a' : '#f0a656');
+    }
+    ctx.globalAlpha = v > 0.45 ? 1 : 0.72;
     ctx.fillRect(px + x, py + y, 1, 1);
   }
   ctx.globalAlpha = 1;
@@ -672,8 +853,34 @@ function gobPuff(ctx, s, r, x, gy) {
   }
   for (let i = 0; i < 7; i++) {                                          // stolen veg, scattered
     const px = x + (hash(i, 9) - 0.5) * 26 + Math.sin(d * 4 + i) * 3, py = cy - 8 - hash(i, 10) * 8 + d * 14;
-    ctx.globalAlpha = clamp(1 - d / 1.8) * 0.9; ctx.fillStyle = i % 3 ? '#d8782a' : '#80ac4e';
-    ctx.fillRect(Math.round(px), Math.round(py), 1, 1);
+    ctx.globalAlpha = clamp(1 - d / 1.8) * 0.9;
+    ctx.fillStyle = r.turnip ? (i % 3 === 0 ? '#763e7c' : i % 3 === 1 ? '#f2e8d4' : '#589c34') : (i % 3 ? '#d8782a' : '#80ac4e');
+    ctx.fillRect(Math.round(px), Math.round(py), r.turnip ? 2 : 1, 1);
+  }
+  ctx.globalAlpha = 1;
+}
+
+const BEETC = ['#221722', '#44241e', '#694648', '#ff8822', '#ffc648', '#fff4a8'];
+function beetlePuff(ctx, s, r, x, gy) {
+  const d = s - r.popAt; if (d < 0 || d > 1.6) return;
+  const cy = gy - 10;
+  if (d < 0.42) {
+    const k = d / 0.42;
+    for (let i = 0; i < 7; i++) {
+      const a = i / 7 * Math.PI * 2 + 0.3, R = 4 + 12 * easeOut(k);
+      ctx.globalAlpha = 0.88 * (1 - k * k);
+      pxEllipse(ctx, x + Math.cos(a) * R, cy + Math.sin(a) * R * 0.7, 3 + 4 * k, 2.5 + 3 * k, i % 2 ? '#ffae38' : '#d88240');
+    }
+    if (d < 0.06) { ctx.globalAlpha = 1; pxEllipse(ctx, x, cy, 8, 6, '#fff4c8'); }
+  }
+  for (let i = 0; i < 24; i++) {
+    const life = 0.55 + hash(i, 5) * 0.45; if (d > life) continue;
+    const a = -Math.PI * (0.05 + 0.9 * hash(i, 6)), sp = 35 + hash(i, 7) * 55;
+    const drag = (1 - Math.exp(-3 * d)) / 3;
+    const px = x + Math.cos(a) * sp * drag * 1.4, py = cy + Math.sin(a) * sp * drag * 1.4 + 70 * d * d;
+    if (py > gy + 1) continue;
+    ctx.globalAlpha = 1 - Math.max(0, (d - life * 0.6) / (life * 0.4));
+    ctx.fillStyle = BEETC[i % BEETC.length]; ctx.fillRect(Math.round(px), Math.round(py), 2, i % 3 ? 1 : 2);
   }
   ctx.globalAlpha = 1;
 }
@@ -777,11 +984,11 @@ function hedgeFX(ctx, s, g, og) {
 // the focus reticle: four gold corner brackets that snap onto the chosen rat, and a little marker above it
 function drawReticle(ctx, s, og) {
   const f = focusAt(s); if (f < 0) return;
-  const r = E.rats[f], st = (r.gob ? gobState : ratState)(r, s, og); if (!st || st.peek) return;
+  const r = E.rats[f], st = (r.gob ? gobState : r.beetle ? beetleState : ratState)(r, s, og); if (!st || st.peek) return;
   const e = focusEntry(s), d = s - e.at;
   const k = easeOutBack(clamp(d / 0.2));
   const breathe = Math.floor(s * 2.4) % 2;
-  const cx = Math.round(st.x - (r.gob ? 1 : 3)), cy = Math.round(st.gy - (r.gob ? 18 : 10));
+  const cx = Math.round(st.x - (r.gob ? 1 : r.beetle ? 2 : 3)), cy = Math.round(st.gy - (r.gob ? 18 : 10));
   const hw = Math.round(lerp(28, r.gob ? 14 : 17, k)) + breathe, hh = Math.round(lerp(22, r.gob ? 20 : 12, k)) + breathe;
   const col = d < 0.08 ? '#ffffff' : '#ffd25a', dark = '#140b0c', hi = '#fff3b0';
   const L = 5;
@@ -806,13 +1013,13 @@ function drawReticle(ctx, s, og) {
 }
 
 // ---------- Beat 3: held coins (dropped by Beat 2's rats, tapped by the player) ----------
-export function heldCoins() { return E.coins.filter(c => c.hold); }
+export function heldCoins() { return E.coins.filter(c => c.hold && !c.archived); }
 export function coinPosAt(c, s, og) { return coinPos(c, s, og); }
 // the nearest resting coin within reach of a click, or null
 export function coinAtPoint(gx, gy, s, og) {
   let best = null, bd = 1e9;
   for (const c of E.coins) {
-    if (!c.hold || c.fly !== undefined || c.roll !== undefined || s < c.land + 0.16) continue;
+    if (c.archived || !c.hold || c.fly !== undefined || c.roll !== undefined || s < c.land + 0.16) continue;
     const [x, y] = coinPos(c, s, og);
     const d = Math.hypot(gx - x, (gy - y) * 1.4);
     if (d < 11 && d < bd) { bd = d; best = c; }
@@ -831,7 +1038,7 @@ export function collectCoinSplash(c, s, og, radius = 34) {
   collectCoin(c, s);
   let n = 1;
   for (const o of E.coins) {
-    if (o === c || !o.hold || o.fly !== undefined || o.roll !== undefined || s < o.land + 0.16) continue;
+    if (o === c || o.archived || !o.hold || o.fly !== undefined || o.roll !== undefined || s < o.land + 0.16) continue;
     const [x, y] = coinPos(o, s, og);
     if (Math.hypot(x - x0, (y - y0) * 1.4) <= radius) { collectCoin(o, s + 0.04 + n * 0.05); n++; }
   }
@@ -841,7 +1048,7 @@ export function collectCoinSplash(c, s, og, radius = 34) {
 export function collectCoinsNear(gx, gy, s, og, radius = 44) {
   let n = 0;
   for (const o of E.coins) {
-    if (!o.hold || o.fly !== undefined || o.roll !== undefined || s < o.land + 0.16) continue;
+    if (o.archived || !o.hold || o.fly !== undefined || o.roll !== undefined || s < o.land + 0.16) continue;
     const [x, y] = coinPos(o, s, og);
     if (Math.hypot(x - gx, (y - gy) * 1.4) <= radius) { collectCoin(o, s + n * 0.045); n++; }
   }
@@ -1017,15 +1224,113 @@ export function equipBest(s) {
   return changed;
 }
 
-// ---------- level (Beat 9: the first level-up) ----------
+// ---------- level & stage transitions (Beat 9–10b+) ----------
 export function heroLevel() { return E.level || 1; }
-export function setLevel(n, s) {
+export function setLevel(n, s, realT) {
   if (E.level === n) return;
+  const prevLv = E.level || 1;
   E.level = n;
-  if (s !== undefined) cue(s, 'chime');
+  E.build = computeHeroSheet(E.heroStyle, n);
+  if (n >= 2) E.tacticalMind = true;
+  if (n > prevLv && s !== undefined) {
+    const gain = (n - prevLv) * (RULES_XP.heroLvHP || 8);
+    if (gain > 0) addHeal(s, gain, 'active');
+  }
+  if (s !== undefined) {
+    E.levelUpAt = s;
+    E.levelUpRealAt = realT ?? performance.now() / 1000;
+    E.levelUpEndAt = null;
+    cue(s, 'levelup');
+  }
+}
+export function endLevelUpCelebration(s) {
+  if (E && E.levelUpEndAt === null) E.levelUpEndAt = s;
+}
+export function canActionSurge(s) {
+  return (E.level || 1) >= 2 && surgeCooldownLeft(E.surgeUsedAt, s, RULES_XP.shortRestSec) <= 0;
+}
+export function triggerActionSurge(t, rng = Math.random) {
+  endSlowMo(t);
+  const s = warp(t);
+  if (!canActionSurge(s)) return false;
+  E.surgeUsedAt = s;
+  E.surgeActiveAt = s;
+  E.surgeRealAt = t;
+  cue(s, 'surge');
+  cue(s + 0.06, 'shout', { i: 3 });
+  const pickTarget = atS => {
+    const ch = chooseTarget(s, atS);
+    if (ch >= 0) return ch;
+    const alive = E.rats.filter(r => !r.archived && r.dieAt === undefined && atS >= r.landT);
+    if (!alive.length) return -1;
+    alive.sort((a, b) => baseX(a, s).x - baseX(b, s).x);
+    return alive[0].id;
+  };
+  const d6 = () => 1 + Math.floor(rng() * 6);
+  const d20 = () => 1 + Math.floor(rng() * 20);
+  const count = surgeSwingCount(E.level || 1);
+  for (let idx = 0; idx < count; idx++) {
+    const at = s + 0.09 + idx * 0.24;
+    const tid = pickTarget(at);
+    const roll = idx === 0 ? Math.max(12, d20()) : d20(); // first surge blow reliably connects in dramatic fashion
+    const crit = roll >= (E.critRange || 20);
+    const dice = crit ? [d6(), d6(), d6(), d6()] : [d6(), d6()];
+    addSwing({ at, rat: tid, roll, dice, applied: false, surge: true, surgeIdx: idx, lunge: tid >= 0 ? 12 + idx * 3 : 4, linger: 0.9 });
+  }
+  return true;
+}
+export function rechargeShortRest() { E.surgeUsedAt = -999; }
+export function grantPotions(n = 3) {
+  E.potions = (E.potions || 0) + n;
+  return E.potions;
+}
+export function drinkPotion(t) {
+  const s = warp(t);
+  if ((E.potions || 0) <= 0) return { ok: false, reason: 'none' };
+  const cur = heroHP(s), max = heroMaxHP();
+  if (cur >= max) return { ok: false, reason: 'full', hp: cur, hpMax: max };
+  E.potions -= 1;
+  E.potionUsedAt = s;
+  const roll = (1 + Math.floor(Math.random() * 4)) + (1 + Math.floor(Math.random() * 4)) + 2;
+  const amt = Math.min(max - cur, Math.max(1, Math.round(roll * (E.potionMult || 1))));
+  addHeal(s, amt, 'active');
+  cue(s, 'potion');
+  return { ok: true, amt, remaining: E.potions };
+}
+export function addBonusXP(xp, x, y, s, label = `+${xp} XP`) {
+  const prevXP = E.orbs.reduce((acc, q) => acc + q.xp, 0);
+  const o = { from: s, arrive: s + 0.72, x, y, depth: 0, xp, cumXP: prevXP + xp, bonus: true, label };
+  E.orbs.push(o);
+  cue(o.arrive, 'xp');
+  return o;
+}
+export function heroBuild() {
+  return E.build || computeHeroSheet(E.heroStyle, E.level || 1);
+}
+export function materials(s = Infinity) {
+  const out = {};
+  for (const m of E.matDrops) if (!m.archived && s >= m.collect) out[m.name] = (out[m.name] || 0) + 1;
+  return out;
+}
+export function setHeroStyle(style) {
+  E.heroStyle = normalizeHeroStyle(style);
+  E.build = computeHeroSheet(E.heroStyle, E.level || 1);
+}
+export function advanceStage(nextStage, s) {
+  for (const r of E.rats) r.archived = true;
+  for (const c of E.coins) if (c.arrive === undefined || s < c.arrive) c.archived = true;
+  for (const m of E.matDrops) if (s < m.collect) m.archived = true;
+  for (const w of E.swings) if (!w.applied && !w.void) voidSwing(w);
+  for (const b of E.bites) if (b.at > s) b.void = true;
+  E.focus.push({ at: s, rat: -1 });
+  E.rounds.length = 0;
+  E.stage = nextStage;
+  UI.hover = -1;
+  UI.pulse = -1;
+  return E.stage;
 }
 
-// ---------- coins ----------
+// ---------- coins, turnips & fire beetle glands ----------
 function buildCoin() {
   const pal = P(['#4a2210', '#7e3e1c', '#b0602c', '#d98b47', '#f4b77a', '#ffe0b8']);
   return [7, 5, 2, 5].map((w) => {
@@ -1039,15 +1344,48 @@ function buildCoin() {
     return r.outline(C('#140b0c')).toCanvas();
   });
 }
+function buildTurnip() {
+  const r = new Raster(9, 10);
+  const PUR = P(['#48224e', '#763e7c', '#a864a8']);
+  const IVO = P(['#9c8e78', '#d4c8ae', '#f2e8d4', '#fffcf0']);
+  const GRN = P(['#2c5a22', '#4c8e38', '#78ba52']);
+  r.ellipse(4, 6, 2.8, 2.7, (x, y, u, v) => v < -0.1 ? ramp(PUR, clamp(0.6 - u * 0.2), x, y, 0) : ramp(IVO, clamp(0.65 - (u + v) * 0.25), x, y, 0));
+  r.set(4, 9, IVO[1]);
+  r.line(4, 3, 2, 1, GRN[1]); r.line(4, 3, 6, 1, GRN[2]); r.set(4, 2, GRN[2]);
+  return r.outline(C('#140b0c')).toCanvas();
+}
+function buildGland() {
+  const r = new Raster(9, 9);
+  const GL = P(['#9a2408', '#df5012', '#ff8c28', '#ffd25a', '#fff6b8']);
+  r.ellipse(4, 4.5, 3.2, 2.9, (x, y, u, v) => ramp(GL, clamp(0.85 - Math.hypot(u, v) * 0.48), x, y, 0));
+  r.set(3, 3, GL[4]);
+  return r.outline(C('#140b0c')).toCanvas();
+}
+function buildThrownDagger() {
+  return [0, 1, 2, 3].map(fr => {
+    const r = new Raster(11, 11);
+    const a = -fr * Math.PI / 2;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const iron = C('#c8a06a'), tip = C('#fff2c8'), hilt = C('#8a6a3e');
+    for (let k = -3; k <= 4; k++) {
+      const px = Math.round(5 + ca * k), py = Math.round(5 + sa * k);
+      r.set(px, py, k >= 3 ? tip : k <= -2 ? hilt : iron);
+    }
+    r.set(Math.round(5 - ca * 1.5 - sa * 1.5), Math.round(5 - sa * 1.5 + ca * 1.5), hilt);
+    r.set(Math.round(5 - ca * 1.5 + sa * 1.5), Math.round(5 - sa * 1.5 - ca * 1.5), hilt);
+    return r.outline(C('#140b0c')).toCanvas();
+  });
+}
 function coinPos(c, s, og) {
   const sx = c.ox, sy = ratGroundY(c.ox, og, c.depth) - 10;
   const gx = c.ox + c.spread, gy = ratGroundY(gx, og, c.depth) - 2;
   if (s < c.land) { const k = (s - c.spawn) / (c.land - c.spawn); return [lerp(sx, gx, k), lerp(sy, gy, k) - Math.sin(Math.PI * k) * c.h, 'air']; }
   if (s < c.land + 0.16) { const k = (s - c.land) / 0.16; return [gx, gy - Math.sin(Math.PI * k) * 4, 'bounce']; }
-  if (c.roll !== undefined) {                                    // untapped too long: it wanders off to the burrow
-    if (s >= c.gone) return [BURROW[0], gy, 'gone'];
+  if (c.roll !== undefined) {                                    // untapped too long: wanders into burrow (Stg 1) or turnip furrow
+    const endX = (c.stage || 1) >= 2 ? gx + 44 : BURROW.x;
+    if (s >= c.gone) return [endX, gy, 'gone'];
     const k = clamp((s - c.roll) / (c.gone - c.roll)), e = easeIn(k);
-    const x = lerp(gx, BURROW[0], e);
+    const x = lerp(gx, endX, e);
     return [x, ratGroundY(x, og, c.depth) - 2 - Math.abs(Math.sin(k * 10)) * 2.5 * (1 - k), 'roll'];
   }
   if (c.fly === undefined || s < c.fly) return [gx, gy, 'rest'];
@@ -1059,14 +1397,14 @@ function coinPos(c, s, og) {
 }
 function drawCoinsGround(ctx, s, og) {
   for (const c of E.coins) {
-    if (s < c.spawn) continue;
+    if (c.archived || s < c.spawn) continue;
     if (c.fly !== undefined && s >= c.fly) continue;
     const [x, y, ph] = coinPos(c, s, og);
     if (ph === 'gone') continue;
     const f = ph === 'rest' ? 0 : Math.floor(s * (ph === 'roll' ? 30 : 18) + c.j) % 4;
     const gy = ratGroundY(x, og, c.depth) - 2;
     ctx.globalAlpha = 0.35; pxEllipse(ctx, x, gy + 3, ph === 'air' ? 2 : 3, 1, '#2a1a10'); ctx.globalAlpha = 1;
-    ctx.drawImage(COIN[f], Math.round(x - 4), Math.round(y - 4));
+    ctx.drawImage(c.turnip ? TURNIP : COIN[f], Math.round(x - 4), Math.round(y - 4));
     if (ph === 'rest') {
       const g = (s - c.land - 0.16) / 0.3; if (g > 0 && g < 1) { ctx.fillStyle = '#fff6dc'; ctx.fillRect(Math.round(x - 2 + g * 4), Math.round(y - 3 + g * 4), 1, 1); ctx.fillRect(Math.round(x - 1 + g * 4), Math.round(y - 3 + g * 4), 1, 1); }
       if (c.hold) {
@@ -1084,7 +1422,7 @@ function drawCoinsGround(ctx, s, og) {
         }
         if (left < 1 && left > 0) {                 // the fidgets: it shivers, eager to wander
           const d = Math.round(Math.sin(s * 40) * 1);
-          ctx.drawImage(COIN[f], Math.round(x - 4) + d, Math.round(y - 4));
+          ctx.drawImage(c.turnip ? TURNIP : COIN[f], Math.round(x - 4) + d, Math.round(y - 4));
         }
       }
     }
@@ -1097,15 +1435,25 @@ function drawCoinsGround(ctx, s, og) {
       ctx.globalAlpha = 1;
     }
   }
+  for (const m of E.matDrops) {
+    if (m.archived || s < m.spawn || s >= m.collect) continue;
+    const [x, y] = coinPos(m, s, og);
+    const gy = ratGroundY(x, og, m.depth) - 2;
+    ctx.globalAlpha = 0.35; pxEllipse(ctx, x, gy + 3, 3, 1, '#2a1a10');
+    ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.45 + 0.25 * Math.sin(s * 9 + m.id);
+    pxEllipse(ctx, x, y, 5, 4, '#ff7a18');
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+    ctx.drawImage(GLAND, Math.round(x - 4), Math.round(y - 4));
+  }
 }
 function drawCoinsFlying(ctx, s, og) {
   for (const c of E.coins) {
     if (c.fly === undefined || s < c.fly || s >= c.arrive + 0.25) continue;
     if (s < c.arrive) {
-      for (let k = 1; k <= 4; k++) { const [tx, ty] = coinPos(c, s - k * 0.025, og); ctx.globalAlpha = 0.5 - k * 0.1; ctx.fillStyle = k < 2 ? '#ffe0b8' : '#f4b77a'; ctx.fillRect(Math.round(tx), Math.round(ty), 1, 1); }
+      for (let k = 1; k <= 4; k++) { const [tx, ty] = coinPos(c, s - k * 0.025, og); ctx.globalAlpha = 0.5 - k * 0.1; ctx.fillStyle = c.turnip ? '#d4c8ae' : (k < 2 ? '#ffe0b8' : '#f4b77a'); ctx.fillRect(Math.round(tx), Math.round(ty), 1, 1); }
       ctx.globalAlpha = 1;
       const [x, y] = coinPos(c, s, og);
-      ctx.drawImage(COIN[Math.floor(s * 22 + c.j) % 4], Math.round(x - 4), Math.round(y - 4));
+      ctx.drawImage(c.turnip ? TURNIP : COIN[Math.floor(s * 22 + c.j) % 4], Math.round(x - 4), Math.round(y - 4));
     } else {
       const k = (s - c.arrive) / 0.25;
       ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 1 - k; ctx.fillStyle = '#ffd49a';
@@ -1119,7 +1467,8 @@ function drawXPOrbs(ctx, s, og) {
     if (s < o.from || s >= o.arrive) continue;
     const k = (s - o.from) / (o.arrive - o.from);
     const sx = o.x, sy = o.y !== undefined ? o.y : ratGroundY(sx, og, o.depth) - 16;
-    const tx = XP_BAR.x + XP_BAR.w * Math.min(1, o.cumXP / RULES.lvl2XP), ty = XP_BAR.y + 1;
+    const frac = xpBandProgress(o.cumXP, E.level || heroLevelForXP(o.cumXP - o.xp));
+    const tx = XP_BAR.x + XP_BAR.w * frac, ty = XP_BAR.y + 1;
     const cx = lerp(sx, tx, 0.5) - 30, cy = Math.min(sy, ty) - 40;
     const at = kk => { const ee = easeIn(kk) * 0.6 + kk * 0.4; return [(1 - ee) ** 2 * sx + 2 * (1 - ee) * ee * cx + ee * ee * tx, (1 - ee) ** 2 * sy + 2 * (1 - ee) * ee * cy + ee * ee * ty]; };
     ctx.globalCompositeOperation = 'lighter';
@@ -1202,7 +1551,7 @@ function drawD20(ctx, s, w, hx, hy) {
   num(ctx, String(n), cx, y - 3, numCol, 'c');
   if (d >= -0.12) {
     const k = clamp((d + 0.12) / 0.14);
-    const word = w.crit ? 'CRIT!' : w.hit ? 'HIT' : w.fumble ? 'FUMBLE' : 'MISS';
+    const word = w.crit ? 'CRIT!' : w.hit ? 'HIT' : 'MISS';
     const ty = y + DR + 4 - Math.round((1 - easeOutBack(k)) * 4);
     num(ctx, word, cx, ty, w.hit ? ['#ffd877', '#fff4c8', '#e8a040'] : ['#a9a4b0', '#d4d0da'], 'c');
   }
@@ -1223,7 +1572,7 @@ function popText(ctx, s, at, str, x, y, col, scale, life = 0.9, rise = 14) {
 const COL = {
   white: ['#ffffff', '#ffffff', '#d8d4e0'], gold: ['#ffd04a', '#ffffff', '#e8a030'], grey: ['#a9a4b0', '#d4d0da'],
   red: ['#ff5a4a', '#ffb0a0', '#c02a2a'], green: ['#6fe07a', '#d8ffd0', '#2f9a48'], xp: ['#8fd0ff', '#e0f4ff', '#4f90d8'],
-  yellow: ['#ffe14a', '#fff8c8', '#e0a020'], ward: ['#c6a8ff', '#f0e8ff', '#7a5ad8'],
+  yellow: ['#ffe14a', '#fff8c8', '#e0a020'], ward: ['#9ecfff', '#eef7ff', '#5c94d4'],
 };
 
 // the shout bubble: a spiky yellow burst with the word in it
@@ -1268,8 +1617,13 @@ export function combatShake(t) {
   let amp = 0;
   for (const w of E.swings) if (w.hit && !w.void) {
     const d = t - w.at;
-    const dur = w.launch ? 0.55 : w.crit ? 0.4 : 0.26, a0 = w.launch ? 5 : w.crit ? 3.6 : 2.2;
+    const dur = w.launch ? 0.55 : w.crit ? 0.4 : w.surge ? 0.30 : 0.26;
+    const a0 = w.launch ? 5 : w.crit ? 3.6 : w.surge ? 2.8 : 2.2;
     if (d >= 0 && d < dur) amp = Math.max(amp, a0 * (1 - d / dur));
+  }
+  if (E.surgeActiveAt != null) {
+    const ds = s - E.surgeActiveAt;
+    if (ds >= 0 && ds < 0.22) amp = Math.max(amp, 2.4 * (1 - ds / 0.22));
   }
   for (const b of E.bites) if (b.hit && !b.void) { const d = s - b.at; if (d >= 0 && d < 0.18) amp = Math.max(amp, 1.2 * (1 - d / 0.18)); }
   for (const cs of E.strikes) { const d = s - cs.at; if (d >= 0 && d < 0.08) amp = Math.max(amp, 0.8); }
@@ -1282,10 +1636,10 @@ export function combatShake(t) {
 export function drawCombatWorld(ctx, p, t, hero) {
   if (t < E.rats[0].burst - 0.01) return;
   const s = warp(t), og = off(p, F.ground);
-  for (const r of E.rats) if (!r.gob) burstFX(ctx, s, r, og);
-  for (const g of E.rats) if (g.gob) hedgeFX(ctx, s, g, og);
+  for (const r of E.rats) if (!r.archived && !r.gob && !r.beetle) burstFX(ctx, s, r, og);
+  for (const g of E.rats) if (!g.archived && g.gob) hedgeFX(ctx, s, g, og);
   drawCoinsGround(ctx, s, og);
-  const live = E.rats.filter(r => !r.gob && s >= r.burst && !(r.popAt <= s)).sort((a, b) => a.depth - b.depth);
+  const live = E.rats.filter(r => !r.archived && !r.gob && !r.beetle && s >= r.burst && !(r.popAt <= s)).sort((a, b) => a.depth - b.depth);
   for (const r of live) {
     const st = ratState(r, s, og); if (!st) continue;
     runDust(ctx, s, r, og);
@@ -1296,6 +1650,17 @@ export function drawCombatWorld(ctx, p, t, hero) {
       pxEllipse(ctx, Math.round(st.x) - 2, Math.round(st.gy), Math.round(11 - st.air * 4), 2, 'rgba(40,28,16,0.34)');
     }
     if (st.emerge) { ctx.save(); ctx.beginPath(); ctx.rect(X - 20, 0, 120, st.emerge); ctx.clip(); }
+    // Pack Tactics: amber glow + ground pulse when 2+ Stage 1 Giant Rats are in melee
+    const pack = !st.emerge && hasPackTactics(r, s);
+    if (pack) {
+      const pa = 0.45 + 0.3 * Math.sin(s * 6.5 + r.id);
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = pa * 0.42; pxEllipse(ctx, Math.round(st.x), Math.round(st.gy), 14, 3, '#ff8c2e');
+      ctx.globalAlpha = pa;
+      const pk = pick(RPACK, st);
+      ctx.drawImage(pk, X - 1, Y); ctx.drawImage(pk, X + 1, Y); ctx.drawImage(pk, X, Y - 1); ctx.drawImage(pk, X, Y + 1);
+      ctx.restore();
+    }
     // a gold glow round a rat under the mouse (or the one the tutorial wants clicked)
     const glow = UI.hover === r.id ? 1 : UI.pulse === r.id ? UI.pulseK : 0;
     if (glow > 0.05 && !st.emerge) {
@@ -1308,11 +1673,37 @@ export function drawCombatWorld(ctx, p, t, hero) {
     if (st.emerge) ctx.restore();
     ratHPBar(ctx, r, s, st);
   }
+  // giant fire beetles: obsidian chitin + glowing orange abdomens lighting the soil
+  const liveB = E.rats.filter(r => !r.archived && r.beetle && s >= r.burst && !(r.popAt <= s)).sort((a, b) => a.depth - b.depth);
+  for (const b of liveB) beetleBurstFX(ctx, s, b, og);
+  for (const b of liveB) {
+    const st = beetleState(b, s, og); if (!st) continue;
+    landDust(ctx, s, st.x, st.gy, b.landT);
+    const img = beetleImg(st), X = Math.round(st.x) - BEETLE_CX, Y = Math.round(st.y) - BEETLE_FEET;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = (0.38 + 0.14 * Math.sin(s * 5 + b.id)) * (1 - st.air * 0.5);
+    ctx.drawImage(BEETLE.soilGlow, Math.round(st.x) - 18, Math.round(st.gy) - 7);
+    ctx.restore();
+    castShadow(ctx, pick(BSIL, st), X, Math.round(st.gy), BEETLE_FEET, { lean: -0.7, squash: 0.3, alpha: 0.3 * (1 - st.air * 0.6) });
+    pxEllipse(ctx, Math.round(st.x), Math.round(st.gy), Math.round(11 - st.air * 4), 2, 'rgba(40,28,16,0.34)');
+    const glow = UI.hover === b.id ? 1 : UI.pulse === b.id ? UI.pulseK : 0;
+    if (glow > 0.05) {
+      ctx.globalAlpha = glow; const g = pick(BGLOW, st);
+      ctx.drawImage(g, X - 1, Y); ctx.drawImage(g, X + 1, Y); ctx.drawImage(g, X, Y - 1); ctx.drawImage(g, X, Y + 1);
+      ctx.globalAlpha = 1;
+    }
+    ctx.drawImage(img, X, Y);
+    if (st.flash) { ctx.globalAlpha = st.flash; ctx.drawImage(BEETLE.flash, X, Y); ctx.globalAlpha = 1; }
+    ratHPBar(ctx, b, s, st);
+  }
   // goblins: peeking, vaulting, scuttling, stabbing
-  const gstat = E.rats.filter(r => r.gob).sort((a, b) => a.depth - b.depth);
+  const gstat = E.rats.filter(r => !r.archived && r.gob).sort((a, b) => a.depth - b.depth);
   for (const g of gstat) {
     const st = gobState(g, s, og); if (!st) continue;
-    const set = g.snik ? SNIK : GOB, sil = g.snik ? SSIL : GSIL, glo = g.snik ? SGLOW : GGLOW;
+    const set = g.snik ? SNIK : g.turnip ? TGOB : GOB;
+    const sil = g.snik ? SSIL : g.turnip ? TGSIL : GSIL;
+    const glo = g.snik ? SGLOW : g.turnip ? TGGLOW : GGLOW;
     if (st.peek) { ctx.drawImage(set.peek, Math.round(st.x - 7), Math.round(st.y)); continue; }
     landDust(ctx, s, st.x, st.gy, g.landT);
     const img = gobImg(st), X = Math.round(st.x) - GOB_CX, Y = Math.round(st.y) - GOB_FEET;
@@ -1335,14 +1726,29 @@ export function drawCombatWorld(ctx, p, t, hero) {
     if (!st.air || st.air < 0.05) ratHPBar(ctx, g, s, st);
   }
   for (const g of gstat) { drawLaunch(ctx, s, g); drawStar(ctx, s, g); if (g.helm) drawHelm(ctx, s, g, og); }
+  drawThrownDaggers(ctx, s, og);
   for (const w of E.swings) if (w.hit && !w.void && w.rat >= 0) {
-    const r = E.rats[w.rat], x = r.dieAt === w.at ? r.deathX : baseX(r, w.at).x;
+    const r = E.rats[w.rat]; if (!r || r.archived) continue;
+    const x = r.dieAt === w.at ? r.deathX : baseX(r, w.at).x;
     impact(ctx, s, w.at, x - 6, ratGroundY(x, og, r.depth) - (r.gob ? 16 : 10), w.crit ? 1.4 : 1);
   }
-  for (const r of E.rats) if (r.dieAt !== undefined && !r.launched) (r.gob ? gobPuff : furPuff)(ctx, s, r, r.deathX + 8, ratGroundY(r.deathX + 8, og, r.depth));
-  for (const cs of E.strikes) { if (s < cs.at || s > cs.at + 0.25) continue; const r = E.rats[cs.rat], x = baseX(r, cs.at).x; csSlash(ctx, s, cs, x - 4, ratGroundY(x, og, r.depth) - (r.gob ? 16 : 11)); }
+  for (const r of E.rats) if (!r.archived && r.dieAt !== undefined && !r.launched) (r.gob ? gobPuff : r.beetle ? beetlePuff : furPuff)(ctx, s, r, r.deathX + 8, ratGroundY(r.deathX + 8, og, r.depth));
+  for (const cs of E.strikes) { if (s < cs.at || s > cs.at + 0.25) continue; const r = E.rats[cs.rat]; if (!r || r.archived) continue; const x = baseX(r, cs.at).x; csSlash(ctx, s, cs, x - 4, ratGroundY(x, og, r.depth) - (r.gob ? 16 : 11)); }
   drawReticle(ctx, s, og);
   if (hero) for (const w of E.swings) smear(ctx, s, w, Math.round(hero.x + HERO_SHOULDER[0]), Math.round(hero.y + HERO_SHOULDER[1]));
+}
+
+function drawThrownDaggers(ctx, s, og) {
+  if (!DAGGER || !E.projectiles?.length) return;
+  for (const pr of E.projectiles) {
+    if (pr.bite?.void || s < pr.fromAt || s > pr.at) continue;
+    const k = clamp((s - pr.fromAt) / Math.max(0.05, pr.at - pr.fromAt));
+    const x = lerp(pr.fromX, pr.toX, k);
+    const y0 = ratGroundY(pr.fromX, og, pr.depth) - 18, y1 = HERO_FEET + og - 22;
+    const y = lerp(y0, y1, k) - Math.sin(Math.PI * k) * 18;
+    const fr = Math.floor((s - pr.fromAt) * 20) % DAGGER.length;
+    ctx.drawImage(DAGGER[fr], Math.round(x - 5), Math.round(y - 5));
+  }
 }
 
 // the spotlight that singles out the hero as the fight begins
@@ -1361,12 +1767,14 @@ export function drawCombatOverlay(ctx, p, t, hero) {
   if (hero) for (const w of E.swings) drawD20(ctx, s, w, hero.cx, hero.feet);
   for (const w of E.swings) {
     if (w.void || w.rat < 0 || !w.hit) continue;
-    const r = E.rats[w.rat], rx = r.dieAt === w.at ? r.deathX : baseX(r, w.at).x, ry = ratGroundY(rx, og, r.depth) - (r.gob ? 54 : 44);
+    const r = E.rats[w.rat]; if (!r || r.archived) continue;
+    const rx = r.dieAt === w.at ? r.deathX : baseX(r, w.at).x, ry = ratGroundY(rx, og, r.depth) - (r.gob ? 54 : 44);
     popText(ctx, s, w.at, String(w.dmg), rx + 12, ry, w.crit ? COL.gold : COL.white, w.crit ? 3 : 2, w.crit ? 1.3 : 1.0);
   }
   // Command Strike numbers: small and yellow, fanned out so a flurry of clicks stays readable
   for (const cs of E.strikes) {
-    const r = E.rats[cs.rat], x = baseX(r, cs.at).x;
+    const r = E.rats[cs.rat]; if (!r || r.archived) continue;
+    const x = baseX(r, cs.at).x;
     popText(ctx, s, cs.at, String(cs.dmg), x + 2 + (hash(cs.n, 4) - 0.5) * 16, ratGroundY(x, og, r.depth) - (r.gob ? 42 : 34) - hash(cs.n, 5) * 6, COL.yellow, 1, 0.7, 12);
   }
   if (hero) {
@@ -1380,13 +1788,62 @@ export function drawCombatOverlay(ctx, p, t, hero) {
       if (!h.passive) popText(ctx, s, h.at, '+' + h.amt, hero.cx - 14, hero.feet - 58, COL.green, 1, 0.8, 10);
       healMotes(ctx, s, h.at, hero);
     }
+    // Stage 3: Level 2 golden pillar of light around hero (bright immediately in slow-mo, fades post-claim)
+    if (E.levelUpAt != null) {
+      const dr = t - (E.levelUpRealAt ?? t);
+      const dend = E.levelUpEndAt != null ? s - E.levelUpEndAt : -1;
+      const show = dend < 0 ? dr >= 0 && dr < 20 : dend < 1.6;
+      if (show) {
+        const inA = clamp(dr / 0.28);
+        const outA = dend >= 0 ? 1 - clamp(dend / 1.6) : 1;
+        const pulse = 0.82 + 0.18 * Math.sin(t * 4.5);
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = clamp(inA * outA * 0.48 * pulse);
+        const bw = Math.round(28 * (0.4 + 0.6 * inA) * (0.9 + 0.1 * Math.sin(t * 3.8)));
+        const g = ctx.createLinearGradient(hero.cx, hero.feet - 148, hero.cx, hero.feet);
+        g.addColorStop(0, 'rgba(255,244,170,0)');
+        g.addColorStop(0.55, 'rgba(255,232,120,0.88)');
+        g.addColorStop(1, 'rgba(255,244,190,0.22)');
+        ctx.fillStyle = g;
+        ctx.fillRect(Math.round(hero.cx - bw / 2), hero.feet - 148, bw, 152);
+        ctx.restore();
+      }
+    }
+    if (E.surgeActiveAt != null) {
+      const ds = s - E.surgeActiveAt;
+      if (ds >= 0 && ds < 0.95) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = (1 - ds / 0.95) * 0.72;
+        for (let i = 0; i < 6; i++) {
+          const sy = hero.feet - 10 - i * 8;
+          const sx = Math.round(hero.cx - 28 - ds * 32 + (i % 2) * 7);
+          ctx.fillStyle = i % 2 ? '#b8f4ff' : '#ffd85a';
+          ctx.fillRect(sx, sy, 16 + (i % 3) * 6, 1);
+        }
+        ctx.restore();
+      }
+      popText(ctx, s, E.surgeActiveAt, 'ACTION SURGE!', hero.cx + 12, hero.feet - 68, COL.gold, 2, 1.45, 14);
+      popText(ctx, s, E.surgeActiveAt + 0.1, 'EXTRA TURN!', hero.cx + 14, hero.feet - 54, ['#b8f4ff', '#ffffff'], 1, 1.35, 11);
+    }
     drawShouts(ctx, s, hero);
+    drawFumbleBird(ctx, s, hero);
   }
-  for (const r of E.rats) if (r.popAt !== undefined) {
+  for (const r of E.rats) if (!r.archived && r.popAt !== undefined) {
     const xpX = r.launched ? Math.min(W - 34, r.deathX + 290) : r.deathX + 24;
     const xpY = r.launched ? 82 : ratGroundY(r.deathX, og, r.depth) - (r.gob ? 26 : 18);
     popText(ctx, s, r.popAt + 0.55, '+' + (r.xp || RULES.ratXP) + ' XP', xpX, xpY, COL.xp, 1, 1.0);
   }
+  for (const c of E.coins) if (!c.archived && c.turnip && c.fly !== undefined) {
+    const [cx, cy] = coinPos(c, c.fly, og);
+    popText(ctx, s, c.fly, '1 CP TURNIP', cx, cy - 10, COL.white, 1, 0.85, 10);
+  }
+  for (const m of E.matDrops) if (!m.archived) {
+    const [mx, my] = coinPos(m, m.collect, og);
+    popText(ctx, s, m.collect, '+1 GLAND', mx, my - 10, COL.gold, 1, 1.1, 14);
+  }
+  for (const o of E.orbs) if (o.bonus && o.label !== null && o.label !== '') popText(ctx, s, o.from, o.label || (`+${o.xp} XP`), o.x, o.y - 6, COL.xp, 1, 1.1, 12);
   drawXPOrbs(ctx, s, og);
   drawCoinsFlying(ctx, s, og);
 }
@@ -1423,7 +1880,31 @@ function healMotes(ctx, s, at, hero) {
   }
   ctx.globalAlpha = 1;
 }
-// Mystra's patience: a shimmering violet shell soaks up the blow
+// Natural 1 fumble slapstick: a tiny meadow bluebird flutters down to perch on the hero's head for 0.5s
+function drawFumbleBird(ctx, s, hero) {
+  if (!hero) return;
+  for (const w of E.swings) {
+    if (w.void || !w.fumble) continue;
+    const d = s - w.at;
+    if (d < -0.02 || d > 0.58) continue;
+    const k = clamp((d + 0.02) / 0.14);
+    const out = d > 0.44 ? clamp((d - 0.44) / 0.14) : 0;
+    const px = Math.round(lerp(hero.cx + 18, hero.cx + 1, easeOut(k)) - out * 16);
+    const py = Math.round(lerp(hero.feet - 82, hero.feet - 63, easeOut(k)) - out * 18 - (d > 0.12 && d < 0.44 ? Math.abs(Math.sin(d * 18)) : 0));
+    const wing = Math.floor(s * 18) % 2;
+    ctx.globalAlpha = 1 - out;
+    ctx.fillStyle = '#140b0c';
+    ctx.fillRect(px - 3, py - 2, 6, 4);
+    ctx.fillStyle = '#5a94d8';
+    ctx.fillRect(px - 2, py - 1, 4, 2);
+    ctx.fillStyle = '#9fd4ff';
+    ctx.fillRect(px - 1, py - 2 + (wing ? -1 : 0), 2, 1);
+    ctx.fillStyle = '#f2b840';
+    ctx.fillRect(px - 4, py - 1, 1, 1);
+    ctx.globalAlpha = 1;
+  }
+}
+// Mystra's patience: a shimmering silver-blue shell soaks up the blow (Stages 1–4)
 function drawWard(ctx, s, at, hero) {
   const d = s - at; if (d < 0 || d > 0.6) return;
   const k = d / 0.6, cx = hero.cx, cy = hero.feet - 30;
@@ -1431,7 +1912,7 @@ function drawWard(ctx, s, at, hero) {
   for (let i = 0; i < 90; i++) {
     const a = i / 90 * Math.PI * 2, R = 26 + k * 4;
     if (bayer(i, Math.floor(s * 30)) > 1 - k * 0.8) continue;
-    ctx.globalAlpha = (1 - k) * 0.9; ctx.fillStyle = i % 3 ? '#b49aff' : '#e8dcff';
+    ctx.globalAlpha = (1 - k) * 0.9; ctx.fillStyle = i % 3 ? '#a8d6ff' : '#eef7ff';
     ctx.fillRect(Math.round(cx + Math.cos(a) * R * 0.8), Math.round(cy + Math.sin(a) * R), 1, 1);
   }
   ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';

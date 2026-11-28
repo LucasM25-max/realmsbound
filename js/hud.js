@@ -21,11 +21,15 @@
 // ─────────────────────────────────────────────────────────────
 import { T, UI_SCALE as S } from './timeline.js';
 import { makeCanvas, crispText, clamp, inv, easeOut, easeOutBack, hash, noise2 } from './util.js';
-import { C, P, Raster, ramp, mixC } from './pix.js';
+import { C, P, Raster, ramp, mixC, darken, lighten } from './pix.js';
 import { heroAnchor } from './actors.js';
 import { easeInOut } from './util.js';
 import { num, numWidth } from './pixfont.js';
 import { hudState, RULES } from './combat.js';
+import {
+  DEFAULT_HERO_STYLE, SKIN_TONES, HAIR_COLORS, EYE_COLORS, CAPE_COLORS, TABARD_COLORS,
+  normalizeHeroStyle, findOption, stageDef, commitHeroName, formatRestCountdown,
+} from './progression.js';
 
 // ---------- palette ----------
 const O = '#140b0c';
@@ -60,10 +64,56 @@ const tileLock = { train: true, gear: true, hero: true };
 export function setTileLocked(k, on) { tileLock[k] = on; }
 let windLocked = true;
 export function setWindLocked(on) { windLocked = on; }
-export function rebuildNow(rank, cp) {
-  if (!Hd.text) return;                       // before buildHUD, the boot-time reset has nothing to rebuild
-  Hd.text.now = tx('Weapon Drills R' + rank, 16, INK, { sh: null });
-  Hd.now = buildNow(String(cp));
+let nextUnlocked = false, nextPulse = false;
+export function setNextUnlocked(on) { nextUnlocked = !!on; }
+export function setNextPulse(on) { nextPulse = !!on; }
+let surgeGuided = false, surgeHover = false;
+export function setSurgeGuided(on) { surgeGuided = !!on; }
+export function setSurgeHover(on) { surgeHover = !!on; }
+let lvFlashAt = -9, surgeUnlockAt = -9, surgeRestAt = -9;
+export function setLevelUpFlash(at) { lvFlashAt = at; }
+export function setSurgeUnlockAt(at) { surgeUnlockAt = at; }
+export function setSurgeRestAt(at) { surgeRestAt = at; }
+let heroCfg = { ...DEFAULT_HERO_STYLE };
+let signCfg = { stage: 1, name: stageDef(1).name, quotaMax: stageDef(1).quota, kind: stageDef(1).kind };
+export function getHeroPortraitCanvas(style) { return heroPortrait(style ? normalizeHeroStyle(style) : heroCfg); }
+export function setHeroIdentity(name, style) {
+  if (style) heroCfg = normalizeHeroStyle(style);
+  if (name !== undefined && name !== null) heroCfg = normalizeHeroStyle({ ...heroCfg, name });
+  if (!Hd.text) return;
+  Hd.portrait = heroPortrait(heroCfg);
+  Hd.text.name = tx(commitHeroName(name ?? heroCfg.name), 16, CREAM, { bold: true });
+}
+export function setStageHUD(stageNum, stageName, quotaMax, kind) {
+  const def = stageDef(stageNum || 1);
+  signCfg = {
+    stage: def.id,
+    name: stageName || def.name,
+    quotaMax: quotaMax || def.quota,
+    kind: kind || def.kind,
+  };
+  if (!Hd.text) return;
+  Hd.text.title = tx(signCfg.name, 16, CREAM, { bold: true });
+  Hd.sign = buildSign();
+}
+let nowCost = 10, nowRect = null, nowBuyRect = null, nowFlashAt = -9, nowFlashLbl = '';
+export function flashNowBuy(lbl = 'TRAINED!') { nowFlashAt = performance.now() / 1000; nowFlashLbl = String(lbl || 'TRAINED!').toUpperCase(); }
+export function getNowRects() { return { tag: nowRect ? { ...nowRect } : null, buy: nowBuyRect ? { ...nowBuyRect } : null }; }
+export function inNowQuickBuy(gx, gy) {
+  return !!nowBuyRect && gx >= nowBuyRect.x && gx < nowBuyRect.x + nowBuyRect.w && gy >= nowBuyRect.y && gy < nowBuyRect.y + nowBuyRect.h;
+}
+export function inNowTag(gx, gy) {
+  return !!nowRect && gx >= nowRect.x && gx < nowRect.x + nowRect.w && gy >= nowRect.y && gy < nowRect.y + nowRect.h;
+}
+export function rebuildNow(labelOrRank, cp, trackId = 'weapon') {
+  nowCost = Math.max(0, Number(cp) || 0);
+  if (!Hd.text) return false;                 // before buildHUD, the boot-time reset has nothing to rebuild
+  const label = typeof labelOrRank === 'number'
+    ? `Weapon Drills R${labelOrRank}`
+    : String(labelOrRank || 'Weapon Drills R1');
+  Hd.text.now = tx(label, 16, INK, { sh: null });
+  Hd.now = buildNow(String(cp), trackId);
+  return true;
 }
 
 // ============================================================
@@ -253,6 +303,20 @@ function iconPotion() {                                 // an empty flask — no
   r.set(3, 7, GL[4]); r.set(3, 8, GL[4]); r.set(4, 6, GL[3]); r.hline(4, 8, 12, GL[1]);
   return OL(r);
 }
+function iconPotionFull() {                             // ruby-red Potion of Healing!
+  const r = new Raster(12, 14);
+  const GL = P(['#4e1820', '#7e2832', '#a8b0c4', '#d8e0ee', '#ffffff']);
+  const LQ = P(['#5e0a16', '#9e1424', '#dd2838', '#ff646e', '#ffd4dc']);
+  r.ellipse(6, 9, 5, 4.6, (x, y, u, v) => {
+    const d = u * u + v * v;
+    if (d > 0.72) return ramp(GL, clamp(0.65 - (u + v) * 0.3), x, y, 0);
+    return v > -0.35 ? ramp(LQ, clamp(0.75 - (u + v) * 0.35), x, y, 0) : ramp(GL, 0.25, x, y, 0);
+  });
+  r.rect(4, 2, 4, 3, (x) => GL[x === 4 ? 3 : 1]);
+  r.rect(3, 0, 6, 2, (x, y) => ramp(P(['#3a2414', '#6e4727', '#a1703f']), 0.7 - (x - 3) * 0.1, x, y, 0));
+  r.set(3, 8, LQ[4]); r.set(3, 9, LQ[4]); r.set(4, 7, LQ[3]);
+  return OL(r);
+}
 function iconTraining() {                               // a sword struck into a straw target
   const r = new Raster(20, 20);
   const ST = P(['#5a3a10', '#8a6420', '#c4943a', '#e8c46a', '#fbe6a0']), RED = P(['#5a0f16', '#9e2228', '#d4483e']);
@@ -306,6 +370,21 @@ function iconSurgeMini() {
   r.set(4, 4, F[2]); r.set(8, 4, F[4]);
   return OL(r);
 }
+function iconCampfire() {
+  const r = new Raster(9, 9);
+  const L = P(['#3a2010', '#6e3f20', '#9c5e34']);
+  const F = P(['#a82814', '#e8621c', '#ffae34', '#fff0a8']);
+  // crossed campfire logs
+  r.line(1, 7, 7, 5, L[1], 1); r.line(1, 5, 7, 7, L[2], 1);
+  r.rect(2, 7, 5, 1, L[0]);
+  // cozy flickering flame & sparks
+  r.rect(3, 4, 3, 2, F[0]);
+  r.rect(3, 3, 3, 2, F[1]);
+  r.rect(4, 2, 1, 3, F[2]);
+  r.set(4, 3, F[3]); r.set(3, 4, F[2]);
+  r.set(2, 2, F[2]); r.set(6, 1, F[3]);
+  return OL(r);
+}
 function iconAuto() {
   const r = new Raster(9, 9);
   for (let a = 0; a < 36; a++) { if (a % 18 > 13) continue; const an = a / 36 * Math.PI * 2; r.set(Math.round(4 + Math.cos(an) * 3.6), Math.round(4 + Math.sin(an) * 3.6), C('#f6d888')); }
@@ -320,60 +399,307 @@ function iconSound(off = false) {
   return OL(r);
 }
 function iconArrow() {
-  const r = new Raster(10, 11), G = P(BRASS);
-  r.poly([[0, 3], [5, 3], [5, 0], [10, 5.5], [5, 11], [5, 8], [0, 8]], (x, y) => ramp(G, clamp(0.75 - y * 0.05 - x * 0.02), x, y, D0));
+  const r = new Raster(14, 15), G = P(BRASS);
+  r.poly([[0, 4], [7, 4], [7, 0], [14, 7.5], [7, 15], [7, 11], [0, 11]], (x, y) => ramp(G, clamp(0.8 - y * 0.045 - x * 0.015), x, y, D0));
+  r.hline(1, 7, 5, G[7]);
   return OL(r);
 }
 
-// The hero's own portrait for the medallion: hood up, three-quarter, facing right (toward the
-// fight), lit by the low sun on the right — matches the sprite (green hood, brown fringe, blue eyes).
-export function heroPortrait() {
-  const N = 30, r = new Raster(N, N);
-  const BG = P(['#2a1d4a', '#3b2860', '#563877', '#7a4a88', '#a65e8c', '#d4808a', '#f0a888']);
-  const HOOD = P(['#0c1d12', '#14301c', '#1f4628', '#2b5d33', '#3a7640', '#4f904c', '#6aa85c', '#8cc070']);
-  const SK = P(['#3e1c16', '#6a3424', '#94523a', '#bd7452', '#dd9a70', '#f2be92', '#ffdcb6']);
-  const HAIR = P(['#1e100a', '#341c12', '#52301d', '#70452a', '#8f5d37']);
-  const LEA = P(['#24140c', '#3d2414', '#5a361d', '#7a4c28', '#9c6636', '#bc844a']);
-  const MAIL = P(['#22242f', '#4f5366', '#7d8296', '#aab0c2', '#d0d5e2']);
-  const GOLD = P(['#8a5a1a', '#c4943a', '#f0c860']);
-  // dusk sky, brighter toward the sun (right)
-  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) r.set(x, y, ramp(BG, clamp(0.18 + (x / N) * 0.55 + (y / N) * 0.12), x, y, 0.6));
-  const F = new Raster(N, N);
-  // shoulders: leather pauldron (near, left), mail at the chest, green collar wrap
-  F.poly([[0, 30], [0, 24], [5, 21], [11, 21], [16, 23], [24, 23], [30, 26], [30, 30]], (x, y) => ramp(MAIL, clamp(0.45 + (x - 14) * 0.03 + ((x + y) % 2 ? 0.08 : -0.06)), x, y, 0));
-  F.ellipse(5.5, 26, 7, 5.5, (x, y, u, v) => ramp(LEA, clamp(0.62 - v * 0.35 + u * 0.12 + (y === 23 ? 0.15 : 0)), x, y, 0));
-  for (let x = 0; x < 12; x++) { const y = Math.round(26 + Math.pow((x - 5.5) / 7, 2) * 4.6 - 0.2); if (F.has(x, y)) F.set(x, y, GOLD[1]); }   // pauldron trim
-  F.line(13, 30, 21, 23, LEA[2], 2); F.line(14, 30, 22, 23, LEA[4]);                                                          // baldric
-  // hood: big rounded cowl, falling to a scarf at the neck
-  F.ellipse(13.5, 12.5, 10.5, 11, (x, y, u, v) => ramp(HOOD, clamp(0.5 + u * 0.28 - v * 0.12 + (Math.sin(x * 0.7 - y * 0.5) > 0.82 ? -0.14 : 0)), x, y, 0));
-  F.poly([[6, 19], [20, 18], [24, 22], [16, 24], [8, 23]], (x, y) => ramp(HOOD, clamp(0.42 + (x - 14) * 0.03 - (y - 18) * 0.04), x, y, 0));       // scarf
-  F.hline(9, 22, 22, HOOD[1]); F.set(15, 21, HOOD[6]); F.set(16, 20, HOOD[6]);
-  // face opening (the hood's inside is in deep shadow)
-  F.ellipse(17.5, 13, 6.8, 8, (x, y) => HOOD[0]);
-  // the face: jaw and cheek lit from the right
-  const face = (x, y) => { const u = (x + 0.5 - 18.2) / 5.6, v = (y + 0.5 - 13.6) / 6.6; return u * u + v * v <= 1 || (y >= 13 && y <= 18 && x >= 18 && x <= 23 - Math.max(0, y - 16)); };
-  for (let y = 6; y < 22; y++) for (let x = 10; x < 25; x++) if (face(x, y)) {
-    const lit = clamp(0.48 + (x - 16) * 0.07 - Math.max(0, 9 - y) * 0.06 - (y > 17 ? 0.08 : 0));
-    F.set(x, y, ramp(SK, lit, x, y, 0));
+// The hero's own 60×60 portrait for the medallion: front-facing cel-shaded bust matching Elminster's craft.
+export function heroPortrait(style = DEFAULT_HERO_STYLE) {
+  const st = normalizeHeroStyle(style);
+  const N = 60, cx = 30, r = new Raster(N, N);
+  const L = () => new Raster(N, N);
+  const ink = (layer, col, amt = 0.52) => layer.outline(col, false, amt);
+  const sh = (pal, t, x, y, d = 0.24) => ramp(pal, clamp(t), x, y, d);
+
+  const BG = P(['#1a1430', '#241a42', '#35245e', '#4c3272', '#6e4384', '#98588d', '#c6758f', '#ee9e92']);
+  const HOOD = P(findOption(CAPE_COLORS, st.capeColor).portrait);
+  const skRamp = findOption(SKIN_TONES, st.skin).ramp;
+  const SK = P([skRamp[0], skRamp[0], skRamp[1], skRamp[2], skRamp[3], skRamp[4], skRamp[5]]);
+  const HAIR = P(findOption(HAIR_COLORS, st.hairColor).ramp);
+  const TAB = P(findOption(TABARD_COLORS, st.tabardColor).ramp);
+  const EYE_C = C(findOption(EYE_COLORS, st.eyeColor).portrait);
+  const EYE_D = darken(EYE_C, 0.42);
+  const EYE_H = lighten(EYE_C, 0.62);
+  const LEA = P(['#1e110a', '#351f12', '#4f2f1a', '#6d4323', '#8c5a30', '#ad7642', '#cc965a']);
+  const MAIL = P(['#1c1e28', '#3c4052', '#5f6478', '#868b9f', '#aeb4c8', '#d6dce9']);
+  const GOLD = P(['#684010', '#96621c', '#c68e32', '#eec258', '#fff0a4']);
+
+  // ---------- backdrop: Shadowdale dusk sky, centered warm halo & twinkling stars ----------
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const halo = Math.max(0, 1 - Math.hypot((x - cx) / 33, (y - 24) / 29));
+    r.set(x, y, sh(BG, 0.12 + halo * 0.72 + (y / N) * 0.08, x, y, 0.5));
   }
-  // nose (profile edge), brow ridge, eyes, mouth, chin, ear
-  F.set(24, 13, SK[5]); F.set(24, 14, SK[4]); F.set(23, 15, SK[3]); F.set(22, 16, SK[2]); F.set(23, 12, SK[5]);
-  F.hline(18, 21, 10, SK[2]); F.hline(14, 16, 10, SK[1]);                         // brows' shadow
-  F.hline(18, 21, 9, HAIR[2]); F.hline(14, 16, 9, HAIR[1]);                       // brows
-  F.set(19, 11, C('#1a1020')); F.set(20, 11, C('#3d78c8')); F.set(21, 11, C('#f3efe6'));   // far eye, looking right
-  F.set(14, 11, C('#1a1020')); F.set(15, 11, C('#3d78c8')); F.set(16, 11, C('#e8dfd0'));   // near eye
-  F.set(19, 12, SK[3]); F.set(15, 12, SK[2]);                                     // lower lids
-  F.hline(19, 21, 17, SK[1]); F.set(22, 17, SK[2]); F.set(20, 18, SK[3]);          // mouth
-  for (const [x, y] of [[16, 18], [17, 19], [19, 19], [21, 19], [15, 17], [18, 20], [20, 20]]) if (F.has(x, y)) F.set(x, y, mixC(F.get(x, y), C('#3a2418'), 0.35));   // stubble
-  F.set(12, 13, SK[2]); F.set(12, 14, SK[3]); F.set(13, 14, SK[1]); F.set(12, 15, SK[1]);   // ear
-  // hair: a brown fringe under the hood, sweeping right
-  for (let x = 11; x <= 22; x++) { const h = 2 + ((x * 7) % 3 === 0 ? 1 : 0) - (x > 20 ? 1 : 0); for (let k = 0; k < h; k++) F.set(x, 6 + k + (x < 13 ? 2 : 0), HAIR[clamp(2 + (x > 17 ? 1 : 0) - k, 0, 4) | 0]); }
-  F.set(22, 8, HAIR[3]); F.set(23, 8, HAIR[2]); F.set(11, 10, HAIR[1]); F.set(11, 11, HAIR[1]); F.set(11, 12, HAIR[0]);
-  // hood rim casts a soft shadow on the forehead
-  for (let x = 12; x <= 23; x++) if (F.has(x, 5)) F.set(x, 5, HOOD[0]);
-  F.outline(C('#0b140c'));
-  F.rim(1, 0, (c) => mixC(c, C('#ffd6a0'), 0.4));
-  r.blit(F, 0, 0);
+  for (const [sx, sy] of [[5, 6], [11, 3], [52, 9], [55, 22], [4, 21]]) r.set(sx, sy, C('#e9dcff'));
+  r.set(8, 10, C('#fff8e4'));
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) r.set(8 + dx, 10 + dy, C('#9c88c4'));
+
+  const fg = L();
+
+  // ---------- back cloak mantle / symmetrical hood cowl ----------
+  const mantle = L();
+  if (st.hoodUp) {
+    // Classic peaked ranger/fighter hood framing the face symmetrically
+    mantle.poly([
+      [cx, 4], [43, 8], [49, 18], [50, 35], [46, 45],
+      [14, 45], [10, 35], [11, 18], [17, 8],
+    ], (x, y) => {
+      const u = (x - cx) / 20, v = (y - 24) / 20;
+      const fold = Math.sin((x - cx) * 0.34 + y * 0.16) > 0.72 ? -0.14 : 0;
+      return sh(HOOD, 0.54 - u * 0.16 - v * 0.14 + fold, x, y, 0.18);
+    });
+    // deep cowl shadow interior around the face
+    mantle.ellipse(cx, 25, 13.5, 15.5, () => HOOD[0]);
+  } else {
+    mantle.poly([[4, 60], [6, 43], [16, 38], [44, 38], [54, 43], [56, 60]], (x, y) => {
+      const fold = Math.sin((x - cx) * 0.4 + (y - 40) * 0.2) > 0.65 ? -0.14 : 0;
+      return sh(HOOD, 0.5 - (x - cx) * 0.012 - (y - 40) * 0.015 + fold, x, y);
+    });
+  }
+  ink(mantle, darken(HOOD[0], 0.45), 0.55);
+  fg.blit(mantle, 0, 0);
+
+  // ---------- shoulders: symmetrical broad armor, tabard chest, diagonal baldric & cloak mantle ----------
+  const armor = L();
+  armor.poly([[-1, 60], [-1, 48], [9, 41], [51, 41], [61, 48], [61, 60]], (x, y) => {
+    const ringRing = ((x + y * 2) % 3 === 0) ? 0.1 : ((x - y) % 3 === 0 ? -0.12 : 0);
+    return sh(MAIL, 0.48 - (x - cx) * 0.012 - (y - 44) * 0.01 + ringRing, x, y, 0.18);
+  });
+  // centered tabard tunic down chest
+  armor.poly([[18, 43], [42, 43], [45, 60], [15, 60]], (x, y) => {
+    const seam = Math.abs(x - cx) < 1 ? -0.16 : 0;
+    const fold = Math.abs(Math.sin((x - cx) * 0.36)) < 0.2 ? -0.14 : 0.06;
+    return sh(TAB, 0.52 - (x - cx) * 0.014 + fold + seam, x, y, 0.18);
+  });
+  // subtle gold trim flanking the chest tabard like Elminster's robe trim
+  armor.line(18, 44, 16, 59, GOLD[3], 2);
+  armor.line(42, 44, 44, 59, GOLD[2], 2);
+  // diagonal leather sword baldric + brass buckle
+  armor.capsule(17, 60, 44, 42, 2.6, 2.3, (x, y, sv) => sh(LEA, 0.5 - sv * 0.22 - (x - cx) * 0.01, x, y, 0.1));
+  armor.rect(28, 49, 5, 5, (x, y, i, j) => (i === 0 || i === 4 || j === 0 || j === 4) ? GOLD[3] : LEA[1]);
+  armor.set(30, 51, GOLD[4]);
+  // symmetrical draped cloak collar / cowl folds over both collarbones
+  armor.poly([[10, 42], [22, 40], [38, 40], [50, 42], [44, 48], [30, 45], [16, 48]], (x, y) => {
+    const crease = Math.abs(y - 43 - Math.abs(x - cx) * 0.12) < 1.1 ? -0.18 : 0.05;
+    return sh(HOOD, 0.54 - (x - cx) * 0.012 - (y - 42) * 0.025 + crease, x, y, 0.15);
+  });
+  // two symmetrical brass cloak clasps
+  for (const bx of [21, 39]) {
+    armor.ellipse(bx, 44.5, 2.0, 2.0, (x, y, u, v) => sh(GOLD, 0.68 - u * 0.22 - v * 0.25, x, y, 0));
+  }
+  // riveted leather pauldrons on both outer shoulders
+  for (const [px, side] of [[8.5, -1], [51.5, 1]]) {
+    armor.ellipse(px, 52, 11.5, 9.5, (x, y, u, v) => {
+      const seam = Math.abs(v + 0.15) < 0.1 ? -0.24 : 0;
+      return sh(LEA, (side < 0 ? 0.6 : 0.44) - v * 0.28 - u * 0.14 + seam, x, y, 0.15);
+    });
+    for (const [rx, ry] of [[px - 3 * side, 47], [px + 2 * side, 46]]) {
+      armor.set(Math.round(rx), ry, GOLD[3]);
+      armor.set(Math.round(rx) + 1, ry, GOLD[4]);
+    }
+  }
+  ink(armor, C('#160e18'), 0.65);
+  fg.blit(armor, 0, 0);
+
+  // ---------- back hair framing both sides of neck/shoulders when hood down ----------
+  if (!st.hoodUp) {
+    const bh = L();
+    if (st.hairStyle === 'braid') {
+      bh.capsule(17, 25, 14, 48, 3.2, 2.4, (x, y, sv) => {
+        const plait = ((x + y) % 4 < 2) ? 0.12 : -0.12;
+        return sh(HAIR, 0.46 + sv * 0.12 + plait, x, y, 0.15);
+      });
+      bh.capsule(43, 25, 45, 46, 3.0, 2.2, (x, y, sv) => {
+        const plait = ((x + y) % 4 < 2) ? 0.12 : -0.12;
+        return sh(HAIR, 0.38 + sv * 0.12 + plait, x, y, 0.15);
+      });
+      bh.rect(12, 44, 4, 2, GOLD[3]);
+      bh.rect(43, 43, 4, 2, GOLD[3]);
+    } else if (st.hairStyle === 'swept' || st.hairStyle === 'parted' || st.hairStyle === 'fringe') {
+      bh.capsule(17, 22, 16, 37, 2.8, 2.2, (x, y, sv) => sh(HAIR, 0.42 + sv * 0.1, x, y, 0.15));
+      bh.capsule(43, 22, 44, 37, 2.8, 2.2, (x, y, sv) => sh(HAIR, 0.34 + sv * 0.1, x, y, 0.15));
+    }
+    ink(bh, darken(HAIR[0], 0.4), 0.55);
+    fg.blit(bh, 0, 0);
+  }
+
+  // ---------- neck & chin shadow ----------
+  const neck = L();
+  neck.poly([[23, 35], [37, 35], [38, 44], [22, 44]], (x, y) => sh(SK, 0.34 - (x - cx) * 0.02 - (38 - Math.min(38, y)) * 0.04, x, y, 0.15));
+  ink(neck, C('#3a1c1a'), 0.55);
+  fg.blit(neck, 0, 0);
+
+  // ---------- front-facing sculpted face + both ears + centered eyes + mouth ----------
+  const face = L();
+  face.poly([
+    [20, 14], [40, 14], [42, 22], [41, 32], [36, 39], [24, 39], [19, 32], [18, 22],
+  ], (x, y) => {
+    const u = (x - cx) / 12, v = (y - 26) / 13;
+    let t = 0.62 - u * 0.18 - v * 0.07; // key light slightly from top-left like stage lighting
+    if (Math.abs(u) > 0.72) t -= (Math.abs(u) - 0.72) * 0.35;
+    if (y < 18 && st.hoodUp) t -= (18 - y) * 0.045;
+    // symmetrical cheekbones catching warm light
+    const cL = Math.hypot((x - 24) / 4.2, (y - 29) / 2.6);
+    if (cL < 1) t += 0.14 * (1 - cL);
+    const cR = Math.hypot((x - 36) / 4.0, (y - 29) / 2.6);
+    if (cR < 1) t += 0.09 * (1 - cR);
+    return sh(SK, t, x, y, 0.18);
+  });
+  // warm cheek vitality on both cheekbones matching Elminster
+  for (const [ckx, str] of [[24, 0.24], [36, 0.18]]) {
+    for (let y = 27; y <= 31; y++) for (let x = ckx - 3; x <= ckx + 3; x++) {
+      if (Math.hypot((x - ckx) / 2.8, (y - 29) / 1.7) < 1 && face.has(x, y)) {
+        face.set(x, y, mixC(face.get(x, y), C('#df6b5a'), str));
+      }
+    }
+  }
+  // symmetrical ears peeking beside temples when hood down
+  if (!st.hoodUp) {
+    for (const [ex, side] of [[17.5, -1], [42.5, 1]]) {
+      face.ellipse(ex, 26.5, 2.0, 3.6, (x, y, u, v) => sh(SK, (side < 0 ? 0.5 : 0.38) - u * 0.15 - v * 0.08, x, y, 0.1));
+      face.vline(Math.round(ex), 25, 28, SK[1]);
+    }
+  }
+  // two symmetrical expressive eyes squarely facing the viewer
+  const ey = 23;
+  const drawEye = (x0, w, ix) => {
+    face.hline(x0, x0 + w - 1, ey, C('#f4efe4'));
+    face.hline(x0 + 1, x0 + w - 2, ey + 1, C('#e5dcd0'));
+    face.rect(ix, ey, 2, 2, EYE_C);
+    face.set(ix + 1, ey, C('#141020'));          // pupil
+    face.set(ix, ey + 1, EYE_D);
+    face.set(ix, ey, EYE_H);                      // twinkling catchlight
+    face.hline(x0 - 1, x0 + w, ey - 1, C('#1c101a'));
+    face.hline(x0, x0 + w - 1, ey - 2, SK[2]);
+    face.hline(x0 + 1, x0 + w - 2, ey + 2, mixC(SK[2], SK[3], 0.4));
+  };
+  drawEye(22, 5, 24);
+  drawEye(33, 5, 34);
+
+  // symmetrical sculpted eyebrows
+  face.hline(21, 27, ey - 3, HAIR[2]); face.hline(22, 26, ey - 4, HAIR[3]);
+  face.hline(33, 39, ey - 3, HAIR[1]); face.hline(34, 38, ey - 4, HAIR[2]);
+
+  // centered determined mouth + warm lower lip
+  face.hline(27, 33, 33, mixC(SK[0], C('#6b2824'), 0.48));
+  face.set(26, 33, SK[2]); face.set(34, 33, SK[2]);
+  face.hline(28, 32, 34, mixC(SK[4], C('#dc7c6a'), 0.3));
+
+  // optional battle scar across left cheek
+  if (st.scar) {
+    face.line(21, 25, 26, 32, SK[1], 1);
+    face.line(22, 25, 27, 31, SK[6], 1);
+  }
+  ink(face, C('#44201c'), 0.55);
+  fg.blit(face, 0, 0);
+
+  // ---------- centered facial hair (under nose layer) ----------
+  if (st.facialHair !== 'clean') {
+    const fh = L();
+    if (st.facialHair === 'stubble') {
+      for (let y = 30; y <= 38; y++) for (let x = 20; x <= 40; x++) {
+        if (face.has(x, y) && ((x * 3 + y * 5) % 4 === 0) && (y > 34 || x < 26 || x > 34)) {
+          fg.set(x, y, mixC(fg.get(x, y), HAIR[1], 0.42));
+        }
+      }
+    } else if (st.facialHair === 'mustache') {
+      fh.poly([[30, 30.5], [24, 31.5], [22, 34], [26, 33], [30, 32], [34, 33], [38, 34], [36, 31.5]], (x, y) =>
+        sh(HAIR, 0.52 - (x - cx) * 0.025, x, y, 0.15));
+    } else if (st.facialHair === 'goatee') {
+      fh.poly([[30, 30.5], [24, 31.5], [22, 34], [26, 33], [30, 32], [34, 33], [38, 34], [36, 31.5]], (x, y) =>
+        sh(HAIR, 0.52 - (x - cx) * 0.025, x, y, 0.15));
+      fh.poly([[26, 35], [34, 35], [33, 41], [30, 42], [27, 41]], (x, y) =>
+        sh(HAIR, 0.48 - (x - cx) * 0.03 - (y - 35) * 0.03, x, y, 0.15));
+    } else if (st.facialHair === 'beard') {
+      fh.poly([[19, 28], [23, 30], [37, 30], [41, 28], [41, 35], [36, 42], [30, 44], [24, 42], [19, 35]], (x, y) => {
+        if (y >= 32 && y <= 34 && x >= 27 && x <= 33) return 0; // clean mouth gap
+        const lock = Math.sin((x - cx) * 0.9 + y * 0.22) > 0.4 ? 0.12 : -0.08;
+        return sh(HAIR, 0.48 - (x - cx) * 0.02 - (y - 30) * 0.018 + lock, x, y, 0.18);
+      });
+    }
+    if (st.facialHair !== 'stubble') {
+      ink(fh, darken(HAIR[0], 0.45), 0.55);
+      fg.blit(fh, 0, 0);
+    }
+  }
+
+  // ---------- centered sculpted nose (overlapping lip/moustache shadow cleanly) ----------
+  const nose = L();
+  nose.poly([[29, 22], [31, 22], [32, 28], [31, 30], [29, 30], [28, 28]], (x, y) => {
+    const lit = 0.62 - (x - cx) * 0.12 - (y - 25) * 0.03;
+    return sh(SK, lit, x, y, 0.08);
+  });
+  nose.set(29, 24, SK[6]); nose.set(29, 27, SK[6]); // bridge light
+  nose.hline(28, 32, 30, SK[1]);                    // underside shadow
+  nose.set(28, 29, SK[0]); nose.set(32, 29, SK[0]); // nostrils
+  fg.blit(nose, 0, 0);
+
+  // ---------- symmetrical front hair crown & bangs ----------
+  if (!st.hoodUp || st.hairStyle !== 'crop') {
+    const hr = L();
+    if (!st.hoodUp) {
+      const topY = st.hairStyle === 'crop' ? 9 : 7;
+      hr.ellipse(cx, 14.5, 13.0, st.hairStyle === 'crop' ? 6.0 : 7.5, (x, y, u, v) => {
+        if (y < topY || y > 19) return 0;
+        const strand = Math.sin((x - cx) * 0.72 + v * 2.2) > 0.45 ? 0.14 : -0.06;
+        return sh(HAIR, 0.52 - u * 0.22 - v * 0.18 + strand, x, y, 0.18);
+      });
+      // symmetrical sideburns
+      hr.poly([[17, 15], [20, 15], [20, 25], [17, 23]], (x, y) => sh(HAIR, 0.42 - (x - 17) * 0.04, x, y, 0.12));
+      hr.poly([[40, 15], [43, 15], [43, 23], [40, 25]], (x, y) => sh(HAIR, 0.34 - (x - 40) * 0.04, x, y, 0.12));
+    }
+    const by0 = st.hoodUp ? 13 : 12;
+    if (st.hairStyle === 'fringe') {
+      for (let x = 20; x <= 40; x++) {
+        const len = 3 + ((x * 7) % 3);
+        for (let k = 0; k < len; k++) {
+          hr.set(x, by0 + k, HAIR[clamp(Math.round(3 - (x - cx) * 0.08 - k * 0.4), 0, 5)]);
+        }
+      }
+    } else if (st.hairStyle === 'parted') {
+      for (let x = 20; x <= 40; x++) {
+        const gap = Math.abs(x - cx) <= 1 ? 1 : 0;
+        const len = gap ? 2 : 4 + (Math.abs(x - cx) > 6 ? 1 : 0);
+        for (let k = 0; k < len; k++) hr.set(x, by0 + k, HAIR[clamp(Math.round(3 - (x - cx) * 0.08), 0, 5)]);
+      }
+    } else if (st.hairStyle === 'swept') {
+      for (let x = 20; x <= 40; x++) {
+        hr.set(x, by0, HAIR[clamp(Math.round(3 - (x - cx) * 0.08), 0, 5)]);
+        hr.set(x, by0 + 1, HAIR[clamp(Math.round(3.5 - (x - cx) * 0.08), 0, 5)]);
+      }
+    } else if (st.hairStyle === 'braid') {
+      for (let x = 20; x <= 40; x++) {
+        hr.set(x, by0, HAIR[clamp(Math.round(3 - (x - cx) * 0.08), 0, 5)]);
+        hr.set(x, by0 + 1, HAIR[clamp(Math.round(3.2 - (x - cx) * 0.08), 0, 5)]);
+      }
+    }
+    ink(hr, darken(HAIR[0], 0.45), 0.55);
+    fg.blit(hr, 0, 0);
+  }
+
+  // ---------- symmetrical front hood rim when hoodUp ----------
+  if (st.hoodUp) {
+    const hoodRim = L();
+    for (let y = 5; y <= 39; y++) for (let x = 12; x <= 48; x++) {
+      const u = (x - cx) / 16.5, v = (y - 22) / 17;
+      const d = u * u + v * v;
+      if (d <= 1.0 && d >= 0.68 && !(Math.abs(x - cx) < 11 && y > 16 && y < 38)) {
+        const fold = Math.sin(y * 0.42) * 0.08;
+        hoodRim.set(x, y, sh(HOOD, 0.54 - u * 0.22 - v * 0.1 + fold, x, y, 0.15));
+      }
+    }
+    // crisp pointed hood apex fold
+    hoodRim.line(cx, 5, cx - 2, 11, HOOD[Math.min(HOOD.length - 1, 4)], 1);
+    ink(hoodRim, darken(HOOD[0], 0.5), 0.55);
+    fg.blit(hoodRim, 0, 0);
+  }
+
+  // ---------- warm key-light rim + cool twilight rim matching Elminster ----------
+  fg.rim(-1, 0, c => mixC(c, C('#ffd6a0'), 0.42));
+  fg.rim(0, -1, c => mixC(c, C('#ffd6a0'), 0.34));
+  fg.rim(1, 0, c => mixC(c, C('#8e9be0'), 0.26));
+  r.blit(fg, 0, 0);
   return r.toCanvas();
 }
 
@@ -417,34 +743,38 @@ function putText(u, img, gx, gy, align = 'l', valign = 't') {
 export function buildHUD() {
   Hd.icons = {
     heart: iconHeart(), cp: iconCoin('cp'), pouch: iconPouch(), skull: iconSkull(), lock: iconLock(), rat: iconRat(),
-    surgeMini: iconSurgeMini(), wind: iconWind(), potion: iconPotion(),
+    surgeMini: iconSurgeMini(), campfire: iconCampfire(), wind: iconWind(), potion: iconPotion(), potionFull: iconPotionFull(),
     train: iconTraining(), helm: iconHelm(), sheet: iconSheet(), speed: iconSpeed(),
     sound: iconSound(false), soundOff: iconSound(true), arrow: iconArrow(),
   };
-  Hd.portrait = heroPortrait();
+  Hd.portrait = heroPortrait(heroCfg);
   // text first: some panels size themselves to it
   const t = Hd.text = {};
-  t.name = tx('Sellsword', 16, CREAM, { bold: true });
+  t.name = tx(commitHeroName(heroCfg.name), 16, CREAM, { bold: true });
   t.cls = tx('Fighter', 14, MUTED);
   t.soon = tx('Action Surge', 16, INK, { sh: null });
+  t.surge = tx('Action Surge', 14, CREAM, { bold: true });
+  t.surgeCd = tx('Short Rest', 14, '#f0d8b4');
   t.stageLbl = tx('STAGE', 10, '#f6d888', { sh: '#3a0c14', spacing: 1 });
-  t.title = tx('Old Skull Meadow', 16, CREAM, { bold: true });
+  t.title = tx(signCfg.name, 16, CREAM, { bold: true });
   t.boss = tx('Boss in', 14, '#f2e2bd');
   t.cp = tx('cp', 16, '#e8a878');
   t.auto = tx('Auto', 12, '#b2afbd');
-  t.now = tx('Weapon Drills', 16, INK, { sh: null });
+  t.now = tx('Weapon Drills R1', 16, INK, { sh: null });
   t.train = tx('Train', 12, CREAM);
   t.gear = tx('Gear', 12, CREAM);
   t.hero = tx('Hero', 12, CREAM);
   Hd.plate = buildPlate();
+  Hd.plateFront = buildPlateFront();
   Hd.sign = buildSign();
   Hd.purse = buildPurse();
   Hd.belt = buildBelt();
   Hd.next = buildNext();
+  Hd.nextOpen = buildNextOpen();
   Hd.route = buildRoute();
   Hd.routeActive = buildRouteActive();
   Hd.soon = buildSoon();
-  Hd.now = buildNow('10');
+  Hd.now = buildNow('10', 'weapon');
 }
 
 // ---------- HERO PLATE  (canvas 172×38, placed at 4,4) ----------
@@ -474,12 +804,36 @@ function buildPlate() {
   });
   return c;
 }
+function buildPlateFront() {
+  const [c, x] = makeCanvas(42, PLATE.h);
+  ring(x, 19, 19, 18, 3);
+  const sx = 27, sy = 24;
+  const shield = (i, j) => { if (i < 0 || i > 12 || j < 0 || j > 13) return false; if (j < 8) return true; const half = 6 - (j - 8) * 1.1; return Math.abs(i - 6) <= half; };
+  shade(x, sx - 1, sy - 1, 15, 16, (i, j) => {
+    const a = shield(i - 1, j - 1); if (!a) return null;
+    const e = !shield(i - 2, j - 1) || !shield(i, j - 1) || !shield(i - 1, j - 2) || !shield(i - 1, j);
+    if (e) return O;
+    const e2 = !shield(i - 3, j - 1) || !shield(i - 1, j - 3);
+    if (!shield(i - 3, j - 1) || !shield(i + 1, j - 1) || !shield(i - 1, j - 3) || !shield(i - 1, j + 1)) return e2 ? BRASS[6] : BRASS[3];
+    return j < 6 ? '#9e2a36' : '#7b2030';
+  });
+  return c;
+}
 function drawPlate(c, u, ox, oy, t, st) {
   const X = PLATE.x + ox, Y = PLATE.y + oy;
   dropShadow(c, Hd.plate, X, Y);
-  c.save(); c.beginPath(); c.arc(X + 19, Y + 19, 15, 0, Math.PI * 2); c.clip();
-  c.drawImage(Hd.portrait, X + 4, Y + 4); c.restore();
   c.drawImage(Hd.plate, X, Y);
+  u.save();
+  u.imageSmoothingEnabled = false;
+  u.beginPath();
+  u.arc((X + 19) * S, (Y + 19) * S, 15 * S, 0, Math.PI * 2);
+  u.clip();
+  u.drawImage(Hd.portrait, Math.round((X + 4) * S), Math.round((Y + 4) * S), 30 * S, 30 * S);
+  u.restore();
+  u.save();
+  u.imageSmoothingEnabled = false;
+  u.drawImage(Hd.plateFront, Math.round(X * S), Math.round(Y * S), Hd.plateFront.width * S, Hd.plateFront.height * S);
+  u.restore();
   // HP: lit top, deep base, one notch per hit point, a glint that travels along it.
   // Damage leaves a pale "ghost" that drains away a moment later.
   const hpW = Math.round(HPW * st.hp / st.hpMax), ds = st.s - st.hpAt;
@@ -497,27 +851,64 @@ function drawPlate(c, u, ox, oy, t, st) {
   if (dh >= 0 && dh < 0.45) { const gx = Math.round(hpW * dh / 0.45); fill(c, '#a8f0a0', X + HPX + Math.max(0, gx - 6), Y + 19, Math.min(6, gx), 2); fill(c, '#e8ffe0', X + HPX + hpW - 1, Y + 19, 1, 6); }
   const g = ((t * 0.35) % 1.8) * HPW;
   if (g < hpW - 3) { fill(c, '#ffd8c8', X + HPX + Math.floor(g), Y + 19, 3, 1); fill(c, '#ff8a80', X + HPX + Math.floor(g) + 1, Y + 20, 2, 2); }
+  const wardAge = st.s - (st.wardAt ?? -9);
+  if ((st.stage || 1) <= 4 && st.hp <= 1 && (st.wardAt ?? -9) >= 0) {
+    const pulse = 0.55 + 0.45 * Math.sin(t * 7.5);
+    c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = 0.35 + 0.45 * pulse;
+    fill(c, '#a8d8ff', X + HPX - 2, Y + 17, HPW + 4, 1);
+    fill(c, '#a8d8ff', X + HPX - 2, Y + 26, HPW + 4, 1);
+    fill(c, '#eef7ff', X + HPX - 2, Y + 18, 1, 8);
+    fill(c, '#eef7ff', X + HPX + HPW + 1, Y + 18, 1, 8);
+    c.restore();
+    if (wardAge >= 0 && wardAge < 3.6 && !surgeHover) {
+      const fade = wardAge > 2.8 ? 1 - (wardAge - 2.8) / 0.8 : 1;
+      c.save(); c.globalAlpha = clamp(fade);
+      num(c, "MYSTRA'S WARD STEADIES THEE", X + 4, Y + 59, ['#b8dcff', '#ffffff'], 'l');
+      c.restore();
+    }
+  }
   c.drawImage(Hd.icons.heart, X + 37, Y + 16);
-  // XP: fills toward Lv 2; each kill's orb lands with a bright tick. A blue mote keeps the track alive.
-  const xpW = Math.round(HPW * st.xp / RULES.lvl2XP);
+  // XP: fills toward next level; each kill's orb lands with a bright tick. A blue mote keeps the track alive.
+  const xpFrac = st.xpFrac !== undefined ? st.xpFrac : Math.min(1, st.xp / RULES.lvl2XP);
+  const xpW = Math.min(HPW, Math.round(HPW * xpFrac));
   if (xpW > 0) { fill(c, '#2f68b8', X + HPX, Y + 29, xpW, 3); fill(c, '#7fc0f0', X + HPX, Y + 29, xpW, 1); fill(c, '#1d3f7a', X + HPX, Y + 31, xpW, 1); fill(c, '#d8f0ff', X + HPX + xpW - 1, Y + 29, 1, 3); }
   const dx = st.s - st.xpAt;
   if (dx >= 0 && dx < 0.35) { c.globalAlpha = 1 - dx / 0.35; fill(c, '#ffffff', X + HPX, Y + 29, xpW, 3); fill(c, '#bfe6ff', X + HPX + xpW - 3, Y + 27, 5, 7); c.globalAlpha = 1; }
   const s = (t * 0.45) % 1.5;
   if (s < 1 && s * HPW > xpW + 1) { fill(c, '#7fc0f0', X + HPX + Math.floor(s * HPW), Y + 29, 1, 3); fill(c, '#2c4f86', X + HPX + Math.floor(s * HPW) - 1, Y + 30, 1, 1); }
   putText(u, Hd.text.name, X + 44, Y + 8.5);
-  putText(u, Hd.text.cls, X + 44 + Math.ceil(Hd.text.name.inkW / S) + 4, Y + 10);
+  const nameW = Math.ceil(Hd.text.name.inkW / S);
+  const clsW = Math.ceil(Hd.text.cls.inkW / S);
+  if (nameW + 4 + clsW <= 121) putText(u, Hd.text.cls, X + 44 + nameW + 4, Y + 10);
   num(c, `${st.hp}/${st.hpMax}`, X + 164, Y + 18 - (ds >= 0 && ds < 0.1 ? 1 : 0), ds >= 0 && ds < 0.5 ? ['#ff8a72', '#ffd0c0'] : ['#fbe9c4', '#ffffff'], 'r');
-  num(c, String(st.level || 1), X + 33, Y + 26, ['#fff1c8', '#ffffff'], 'c', { outline: '#3a0c14' });
-  twinkle(c, X + 7, Y + 7, t, 4.3, 0.2);
+  num(u, String(st.level || 1), (X + 33) * S, (Y + 26) * S, ['#fff1c8', '#ffffff'], 'c', { outline: '#3a0c14', scale: S });
+  const dlv = t - lvFlashAt;
+  if (dlv >= 0 && dlv < 3.5) {
+    const p = 0.5 + 0.5 * Math.sin(t * 9.0);
+    const fade = dlv > 2.5 ? 1 - (dlv - 2.5) : 1;
+    c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = fade * (0.28 + 0.42 * p);
+    fill(c, '#ffd858', X + 26, Y + 23, 15, 1);
+    fill(c, '#ffd858', X + 26, Y + 38, 15, 1);
+    fill(c, '#ffd858', X + 26, Y + 24, 1, 14);
+    fill(c, '#ffd858', X + 40, Y + 24, 1, 14);
+    c.restore();
+    twinkle(u, (X + 33) * S, (Y + 22) * S, t, 1.4, 0.0, S);
+    twinkle(u, (X + 24) * S, (Y + 34) * S, t, 1.6, 0.5, S);
+  }
+  twinkle(u, (X + 7) * S, (Y + 7) * S, t, 4.3, 0.2, S);
 }
 
 // a four-point star glint, flashed briefly every `period` seconds
-function twinkle(c, X, Y, t, period, phase = 0) {
+function twinkle(c, X, Y, t, period, phase = 0, sc = 1) {
   const k = ((t / period + phase) % 1) * period;
   if (k > 0.3) return;
   const r = k < 0.1 ? 1 : k < 0.2 ? 2 : 1;
-  fill(c, '#fff8dc', X, Y); for (let i = 1; i <= r; i++) { fill(c, i === r ? '#f6d888' : '#fff8dc', X - i, Y); fill(c, i === r ? '#f6d888' : '#fff8dc', X + i, Y); fill(c, i === r ? '#f6d888' : '#fff8dc', X, Y - i); fill(c, i === r ? '#f6d888' : '#fff8dc', X, Y + i); }
+  fill(c, '#fff8dc', X, Y, sc, sc);
+  for (let i = 1; i <= r; i++) {
+    const col = i === r ? '#f6d888' : '#fff8dc';
+    fill(c, col, X - i * sc, Y, sc, sc); fill(c, col, X + i * sc, Y, sc, sc);
+    fill(c, col, X, Y - i * sc, sc, sc); fill(c, col, X, Y + i * sc, sc, sc);
+  }
 }
 
 // ---------- SOON tag: what Level 2 unlocks ----------
@@ -541,11 +932,89 @@ function buildSoon() {
   num(x, '2', bx + 5.5, 4, ['#fff1c8', '#ffffff'], 'c', { outline: '#3a0c14', shadow: false });
   c.tw = tw; return c;
 }
+export const SURGE_BTN = { x: PLATE.x + 44, y: PLATE.y + 38, w: 120, h: 16 };
+export const inSurgeBtn = (gx, gy) => gx >= SURGE_BTN.x && gx < SURGE_BTN.x + SURGE_BTN.w && gy >= SURGE_BTN.y && gy < SURGE_BTN.y + SURGE_BTN.h;
+function drawSurgeBtn(c, u, X, Y, t, st) {
+  const w = SURGE_BTN.w, h = SURGE_BTN.h;
+  const ready = !!st.surgeReady;
+  fill(c, 'rgba(40,20,8,0.42)', X + 1, Y + h, w - 1, 2);
+  fill(c, O, X, Y, w, h);
+  if (ready) {
+    const justUnlocked = t - surgeUnlockAt >= 0 && t - surgeUnlockAt < 3.6;
+    const justRested = t - surgeRestAt >= 0 && t - surgeRestAt < 0.75;
+    const highlight = surgeGuided || justUnlocked || surgeHover;
+    const pulse = 0.5 + 0.5 * Math.sin(t * (highlight ? 7.5 : 4.0));
+    fill(c, surgeHover ? '#962e1c' : '#7e2618', X + 1, Y + 1, w - 2, h - 2);
+    fill(c, surgeHover ? '#c24628' : '#a83820', X + 1, Y + 1, w - 2, 5);
+    fill(c, surgeHover ? BRASS[6] : BRASS[5], X + 1, Y + 1, w - 2, 1);
+    fill(c, BRASS[2], X + 1, Y + h - 2, w - 2, 1);
+    if (highlight || pulse > 0.45) {
+      c.save(); c.globalCompositeOperation = 'lighter';
+      c.globalAlpha = highlight ? 0.38 + 0.45 * pulse : 0.14 + 0.14 * pulse;
+      fill(c, '#ffcf56', X - 1, Y - 1, w + 2, 1);
+      fill(c, '#ffcf56', X - 1, Y + h, w + 2, 1);
+      fill(c, '#ffcf56', X - 1, Y, 1, h);
+      fill(c, '#ffcf56', X + w, Y, 1, h);
+      c.restore();
+    }
+    if (justRested) {
+      const k = (t - surgeRestAt) / 0.75;
+      c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = 0.65 * (1 - k);
+      fill(c, '#fff6d0', X + 1, Y + 1, w - 2, h - 2);
+      c.restore();
+    }
+    c.drawImage(Hd.icons.surgeMini, X + 3, Y + 3);
+    putText(u, Hd.text.surge, X + 16, Y + 8, 'l', 'm');
+    // crisp [Q] keycap on right
+    fill(c, O, X + w - 15, Y + 3, 12, 10);
+    fill(c, BRASS[4], X + w - 14, Y + 4, 10, 8);
+    fill(c, BRASS[6], X + w - 14, Y + 4, 10, 1);
+    num(c, 'Q', X + w - 9, Y + 5, ['#3a1808', '#5e2810'], 'c', { outline: null, shadow: false });
+    if (highlight) {
+      twinkle(c, X + 2, Y + 2, t, 1.5, 0.1);
+      twinkle(c, X + w - 4, Y + h - 3, t, 1.7, 0.6);
+    }
+  } else {
+    fill(c, '#201926', X + 1, Y + 1, w - 2, h - 2);
+    fill(c, '#140f18', X + 1, Y + h - 2, w - 2, 1);
+    const fw = Math.round((w - 2) * clamp(st.surgeFrac || 0));
+    if (fw > 0) {
+      fill(c, '#7a3418', X + 1, Y + 1, fw, h - 2);
+      fill(c, '#c86624', X + 1, Y + 1, fw, 3);
+      fill(c, '#f6b252', X + 1, Y + 1, fw, 1);
+      fill(c, '#ffe89c', X + fw, Y + 1, 1, h - 2);
+    }
+    c.drawImage(Hd.icons.campfire, X + 3, Y + 3);
+    const cd = formatRestCountdown(st.surgeRemain);
+    putText(u, Hd.text.surgeCd, X + 16, Y + 8, 'l', 'm');
+    num(c, cd, X + w - 5, Y + 5, ['#ffe0a8', '#ffffff'], 'r', { outline: O });
+  }
+  if (surgeHover) {
+    const line1 = ready ? 'ACTION SURGE [Q] - EXTRA TURN' : `SHORT REST - ${formatRestCountdown(st.surgeRemain)} LEFT`;
+    const line2 = ready ? '2 SWINGS. 90S REST OR BOSS' : 'RECHARGES IN 90S OR STAGE BOSS';
+    const tw = Math.max(numWidth(line1), numWidth(line2)) + 10;
+    const th = 22;
+    const tx0 = clamp(X + Math.floor((w - tw) / 2), 8, 194 - tw);
+    const ty0 = Y + h + 4;
+    fill(c, 'rgba(14,8,12,0.48)', tx0 + 1, ty0 + 2, tw, th);
+    fill(c, O, tx0, ty0, tw, th);
+    fill(c, '#e9d3a6', tx0 + 1, ty0 + 1, tw - 2, th - 2);
+    fill(c, '#f2e2bd', tx0 + 1, ty0 + 1, tw - 2, 2);
+    fill(c, '#cba571', tx0 + 1, ty0 + th - 2, tw - 2, 1);
+    num(c, line1, tx0 + 5, ty0 + 3, ready ? ['#7c1e12', '#a83420'] : ['#3b2418', '#5e3824'], 'l', { outline: null, shadow: false });
+    num(c, line2, tx0 + 5, ty0 + 12, ['#5a3a22', '#7a5234'], 'l', { outline: null, shadow: false });
+  }
+}
 
 // ---------- STAGE SIGN ----------
 const SIGN = { x: 228, y: 0, w: 184, h: 34 };
-const SEG0 = 40, SEGW = 9;
+const SEG0 = 40;
+function signMetrics(qMax = signCfg.quotaMax || 10) {
+  const segW = qMax <= 10 ? 9 : qMax <= 12 ? 7 : Math.max(4, Math.floor(92 / qMax));
+  return { qMax, segW };
+}
 function buildSign() {
+  const { qMax, segW } = signMetrics();
   const [c, x] = makeCanvas(SIGN.w, SIGN.h);
   for (const rx of [30, 154]) for (let y = 0; y < 6; y++) { fill(x, O, rx - 1, y, 4, 1); fill(x, (y % 2) ? '#c9a46a' : '#8a6a3e', rx, y, 2, 1); fill(x, (y % 2) ? '#8a6a3e' : '#c9a46a', rx + (y % 2), y, 1, 1); }
   panel(x, 10, 4, 172, 28, { k: 2, mat: 'wood', seed: 11 });
@@ -556,27 +1025,29 @@ function buildSign() {
   // stage medallion overlapping the left end
   ring(x, 14, 17, 15, 3, IRON.concat(['#d8d4e0']));
   for (let j = -12; j <= 12; j++) for (let i = -12; i <= 12; i++) { const d = Math.hypot(i, j); if (d < 11.5) fill(x, d > 10 ? '#5a1520' : (j < -3 ? '#a42c38' : '#7b2030'), 14 + i, 17 + j); }
-  // quota track: ten sunken pockets
-  fill(x, O, SEG0 - 2, 20, SEGW * 10 + 3, 9);
-  for (let i = 0; i < 10; i++) { fill(x, '#0c0607', SEG0 + i * SEGW, 21, SEGW - 1, 7); fill(x, '#24140e', SEG0 + i * SEGW, 27, SEGW - 1, 1); }
-  x.drawImage(Hd.icons.rat, SEG0 + SEGW * 10 + 3, 19);
+  // quota track: qMax sunken pockets
+  fill(x, O, SEG0 - 2, 20, segW * qMax + 3, 9);
+  for (let i = 0; i < qMax; i++) { fill(x, '#0c0607', SEG0 + i * segW, 21, segW - 1, 7); fill(x, '#24140e', SEG0 + i * segW, 27, segW - 1, 1); }
+  x.drawImage(Hd.icons.rat, SEG0 + segW * qMax + 3, 19);
   return c;
 }
 function drawSign(c, u, ox, oy, t, st) {
-  const quota = st.quota, dq = st.s - st.quotaAt;
+  const qMax = st.quotaMax || signCfg.quotaMax || 10;
+  const { segW } = signMetrics(qMax);
+  const quota = Math.min(qMax, st.quota || 0), dq = st.s - st.quotaAt;
   const X = SIGN.x + ox, Y = SIGN.y + oy;
   dropShadow(c, Hd.sign, X, Y);
   c.drawImage(Hd.sign, X, Y);
-  for (let i = 0; i < quota; i++) { const sx = X + SEG0 + i * SEGW; fill(c, '#d8782a', sx, Y + 21, SEGW - 1, 7); fill(c, '#ffc45a', sx, Y + 21, SEGW - 1, 2); fill(c, '#a04a1a', sx, Y + 27, SEGW - 1, 1); }
+  for (let i = 0; i < quota; i++) { const sx = X + SEG0 + i * segW; fill(c, '#d8782a', sx, Y + 21, segW - 1, 7); fill(c, '#ffc45a', sx, Y + 21, segW - 1, 2); fill(c, '#a04a1a', sx, Y + 27, segW - 1, 1); }
   // the next empty pocket breathes: "fill me"
-  if (quota < 10) { const a = 0.10 + 0.10 * (0.5 + 0.5 * Math.sin(t * 4)); c.fillStyle = `rgba(255,196,90,${a.toFixed(3)})`; c.fillRect(X + SEG0 + quota * SEGW, Y + 21, SEGW - 1, 7); }
+  if (quota < qMax) { const a = 0.10 + 0.10 * (0.5 + 0.5 * Math.sin(t * 4)); c.fillStyle = `rgba(255,196,90,${a.toFixed(3)})`; c.fillRect(X + SEG0 + quota * segW, Y + 21, segW - 1, 7); }
   putText(u, Hd.text.stageLbl, X + 14, Y + 7, 'c');
   num(c, String(st.stage || 1), X + 14, Y + 13, ['#fff1c8', '#ffffff', '#f6d0a0'], 'c', { outline: '#3a0c14', scale: 2 });
   putText(u, Hd.text.title, X + 96, Y + 11, 'c', 'm');
   if (dq >= 0 && dq < 0.4 && quota > 0) {       // the pocket just filled flares white, then settles to amber
-    const sx = X + SEG0 + (quota - 1) * SEGW; c.globalAlpha = 1 - dq / 0.4; fill(c, '#fff6d8', sx - 1, Y + 20, SEGW + 1, 9); c.globalAlpha = 1;
+    const sx = X + SEG0 + (quota - 1) * segW; c.globalAlpha = 1 - dq / 0.4; fill(c, '#fff6d8', sx - 1, Y + 20, segW + 1, 9); c.globalAlpha = 1;
   }
-  num(c, `${quota}/10`, X + 178, Y + 21 - (dq >= 0 && dq < 0.1 ? 1 : 0), dq >= 0 && dq < 0.4 ? ['#ffd877', '#ffffff'] : ['#fbe9c4', '#ffffff'], 'r');
+  num(c, `${quota}/${qMax}`, X + 178, Y + 21 - (dq >= 0 && dq < 0.1 ? 1 : 0), dq >= 0 && dq < 0.4 ? ['#ffd877', '#ffffff'] : ['#fbe9c4', '#ffffff'], 'r');
   twinkle(c, X + 5, Y + 7, t, 5.1, 0.55);
 }
 
@@ -666,24 +1137,51 @@ function drawPurse(c, u, ox, oy, t, st) {
 
 // ---------- NEXT STAGE bookmark on the right edge ----------
 const NEXT = { x: 614, y: 146, w: 28, h: 52 };
+export const inNextTile = (gx, gy) => gx >= NEXT.x && gx < NEXT.x + NEXT.w && gy >= NEXT.y && gy < NEXT.y + NEXT.h;
+export const inHeroTile = (gx, gy) => gx >= BELT.x + TILES[2] && gx < BELT.x + TILES[2] + 26 && gy >= BELT.y + 15 && gy < BELT.y + 44;
+export const inHeroPortrait = (gx, gy) => Math.hypot(gx - (PLATE.x + 19), gy - (PLATE.y + 19)) <= 17;
 function buildNext() {
   const [c, x] = makeCanvas(NEXT.w, NEXT.h);
   panel(x, 0, 4, 32, 40, { k: 3, mat: 'wood', seed: 21 });
-  const a = Hd.icons.arrow; x.globalAlpha = 0.5; x.drawImage(a, 8, 11); x.globalAlpha = 1;
+  const a = Hd.icons.arrow; x.globalAlpha = 0.5; x.drawImage(a, 6, 8); x.globalAlpha = 1;
   for (let i = 0; i < 26; i += 3) { fill(x, O, 1 + i, 27, 3, 3); fill(x, IRON[4], 2 + i, 28, 1, 1); }
   return c;
 }
+function buildNextOpen() {
+  const [c, x] = makeCanvas(NEXT.w, NEXT.h);
+  panel(x, 0, 4, 32, 40, { k: 3, mat: 'wood', seed: 22 });
+  fill(x, BRASS[5], 2, 6, 26, 1); fill(x, BRASS[2], 2, 41, 26, 1); fill(x, BRASS[4], 2, 6, 1, 36);
+  rivet(x, 4, 8); rivet(x, 4, 38);
+  x.drawImage(Hd.icons.arrow, 6, 15);
+  return c;
+}
 function drawNext(c, u, ox, oy, t) {
-  const X = NEXT.x + ox, Y = NEXT.y + oy;
-  dropShadow(c, Hd.next, X - 2, Y);
-  c.drawImage(Hd.next, X, Y);
-  const sw = Math.round(Math.sin(t * 1.6) * 0.8);
-  c.drawImage(Hd.icons.lock, X + 9 + sw, Y + 29);
+  const nudgeX = nextUnlocked && nextPulse ? Math.round(Math.sin(t * 4.5) * 1.5) : 0;
+  const X = NEXT.x + ox + nudgeX, Y = NEXT.y + oy;
+  if (!nextUnlocked) {
+    dropShadow(c, Hd.next, X - 2, Y);
+    c.drawImage(Hd.next, X, Y);
+    const sw = Math.round(Math.sin(t * 1.6) * 0.8);
+    c.drawImage(Hd.icons.lock, X + 9 + sw, Y + 29);
+    return;
+  }
+  dropShadow(c, Hd.nextOpen, X - 2, Y);
+  c.drawImage(Hd.nextOpen, X, Y);
+  const k = 0.5 + 0.5 * Math.sin(t * 4.6);
+  c.save(); c.globalCompositeOperation = 'lighter';
+  c.globalAlpha = (nextPulse ? 0.35 : 0.18) + (nextPulse ? 0.45 : 0.22) * k;
+  fill(c, '#ffd25a', X - 1, Y + 3, 29, 1);
+  fill(c, '#ffd25a', X - 1, Y + 44, 29, 1);
+  fill(c, '#ffd25a', X - 1, Y + 3, 1, 42);
+  c.restore();
+  twinkle(c, X + 5, Y + 10, t, 1.9, 0.2);
+  twinkle(c, X + 20, Y + 35, t, 2.3, 0.7);
 }
 
 // ---------- ACTION BELT (bottom-right) ----------
 const BELT = { x: 484, y: 314, w: 154, h: 46 };
 const SOCKETS = [16, 42], TILES = [68, 96, 124], SY = 30;
+export const inPotionSocket = (gx, gy) => Math.hypot(gx - (BELT.x + SOCKETS[1]), gy - (BELT.y + SY)) <= 13;
 function buildBelt() {
   const [c, x] = makeCanvas(BELT.w, BELT.h);
   panel(x, 0, 13, 154, 33, { k: 4, mat: 'leather', seed: 9 });
@@ -712,13 +1210,37 @@ function buildBelt() {
   });
   return c;
 }
-function drawBelt(c, u, ox, oy, t) {
+function drawBelt(c, u, ox, oy, t, st) {
   const X = BELT.x + ox;
   // Beat 6: until the yard is opened the belt gives a little hop and the Train tile pulses gold
   const cyc = t % 1.2, hop = trainPulse && cyc < 0.3 ? -Math.round(Math.sin(cyc / 0.3 * Math.PI) * 3) : 0;
   const Y = BELT.y + oy + hop;
   dropShadow(c, Hd.belt, X - 1, BELT.y + oy - 3);
   c.drawImage(Hd.belt, X, Y);
+  // Live [2] Potion of Healing slot when hero owns potions (Hedrun's gift on Stage 3 clear!)
+  if (st && st.potions > 0) {
+    const px0 = X + SOCKETS[1], py0 = Y + SY;
+    for (let j = -10; j <= 10; j++) for (let i = -10; i <= 10; i++) {
+      const d = Math.hypot(i, j);
+      if (d < 9.6) fill(c, d > 8.4 ? '#4a1820' : (j < -2 ? '#2e1620' : '#1e1018'), px0 + i, py0 + j);
+    }
+    c.drawImage(Hd.icons.potionFull, px0 - 7, py0 - 8);
+    if (st.hp < st.hpMax) {
+      const a = 0.32 + 0.38 * (0.5 + 0.5 * Math.sin(t * 4.5));
+      c.save(); c.globalAlpha = a; c.globalCompositeOperation = 'lighter';
+      for (let j = -12; j <= 12; j++) for (let i = -12; i <= 12; i++) {
+        const d = Math.hypot(i, j);
+        if (d > 9.6 && d < 11.6) fill(c, d > 10.6 ? '#c8303e' : '#ff6a78', px0 + i, py0 + j);
+      }
+      c.restore();
+      twinkle(c, px0 - 6, py0 - 7, t, 2.2, 0.4);
+    }
+    fill(c, O, px0 + 4, py0 + 3, 9, 11);
+    fill(c, '#7e202c', px0 + 5, py0 + 4, 7, 9);
+    fill(c, '#c8424e', px0 + 5, py0 + 4, 7, 1);
+    num(c, String(st.potions), px0 + 8.5, py0 + 5, ['#fff2d8', '#ffffff'], 'c', { outline: null });
+    keycap(c, px0 - 13, Y + 36, '2');
+  }
   if (trainPulse) {
     const k = 0.5 + 0.5 * Math.sin(t * 4.6);
     c.save(); c.globalCompositeOperation = 'lighter';
@@ -789,16 +1311,39 @@ function drawBelt(c, u, ox, oy, t) {
 }
 
 // ---------- NOW tag: the next thing worth buying ----------
-function buildNow(costStr = '10') {
+const NOW_CHIP = {
+  weapon: ['#5a3414', '#7e4c20', '#3a200c'],
+  armour: ['#2b3b52', '#445d82', '#1a2434'],
+  footwork: ['#244e2b', '#387442', '#16301b'],
+  tactics: ['#584214', '#7c6020', '#36270a'],
+  scavenging: ['#4b3912', '#70581e', '#2e2208'],
+  conditioning: ['#5a1c28', '#822c3c', '#381018'],
+};
+function buildNow(costStr = '10', trackId = 'weapon') {
   const tw = Math.ceil(Hd.text.now.inkW / S);
-  const w = 14 + 4 + tw + 6 + 9 + numWidth(costStr) + 4, h = 14;
-  const [c, x] = slip(w, h, ['#5a3414', '#7e4c20', '#3a200c']);
-  fill(x, '#5a3414', 1, 1, 12, h - 2); fill(x, '#7e4c20', 1, 1, 12, 1); fill(x, '#3a200c', 1, h - 2, 12, 1);
-  // a tiny crossed-swords mark for "Training"
-  const sw = [[2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7], [8, 8], [10, 2], [9, 3], [8, 4], [7, 5], [5, 7], [4, 8]];
-  for (const [i, j] of sw) fill(x, '#e3e6ee', i + 1, j + 1);
-  fill(x, '#e5b84d', 3, 9, 2, 1); fill(x, '#e5b84d', 9, 9, 2, 1); fill(x, '#6d462c', 2, 10, 1, 2); fill(x, '#6d462c', 11, 10, 1, 2);
-  const cx = 14 + 4 + tw + 5;
+  const w = 14 + 4 + tw + 5 + 9 + numWidth(costStr) + 16, h = 14;
+  const chip = NOW_CHIP[trackId] || NOW_CHIP.weapon;
+  const [c, x] = slip(w, h, chip);
+  if (trackId === 'armour') {
+    fill(x, '#8fa6c2', 4, 3, 6, 5); fill(x, '#c9d8eb', 4, 3, 6, 1); fill(x, '#607490', 5, 8, 4, 2); fill(x, '#607490', 6, 10, 2, 1);
+    fill(x, '#e5b84d', 6, 4, 2, 4);
+  } else if (trackId === 'footwork') {
+    fill(x, '#c9945a', 4, 4, 3, 6); fill(x, '#c9945a', 4, 9, 6, 2);
+    fill(x, '#eef4ff', 8, 3, 3, 1); fill(x, '#eef4ff', 7, 5, 3, 1); fill(x, '#d0e2f4', 8, 7, 2, 1);
+  } else if (trackId === 'tactics') {
+    fill(x, '#f2d06b', 6, 3, 2, 8); fill(x, '#f2d06b', 3, 6, 8, 2); fill(x, '#fff4cc', 6, 6, 2, 2);
+  } else if (trackId === 'scavenging') {
+    fill(x, '#e5b84d', 4, 4, 6, 6); fill(x, '#fff2b0', 5, 4, 4, 1); fill(x, '#c48628', 5, 8, 4, 2);
+    fill(x, '#ffffff', 9, 3, 2, 2);
+  } else if (trackId === 'conditioning') {
+    fill(x, '#ff6a74', 4, 4, 2, 3); fill(x, '#ff6a74', 8, 4, 2, 3); fill(x, '#e63c48', 4, 5, 6, 3);
+    fill(x, '#c82834', 5, 8, 4, 2); fill(x, '#c82834', 6, 10, 2, 1); fill(x, '#ffd2d8', 4, 4, 1, 1);
+  } else {
+    const sw = [[2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7], [8, 8], [10, 2], [9, 3], [8, 4], [7, 5], [5, 7], [4, 8]];
+    for (const [i, j] of sw) fill(x, '#e3e6ee', i + 1, j + 1);
+    fill(x, '#e5b84d', 3, 9, 2, 1); fill(x, '#e5b84d', 9, 9, 2, 1); fill(x, '#6d462c', 2, 10, 1, 2); fill(x, '#6d462c', 11, 10, 1, 2);
+  }
+  const cx = 14 + 4 + tw + 4;
   x.drawImage(Hd.icons.cp, cx - 1, 2);
   num(x, costStr, cx + 9, 3, ['#4a2412', '#7a3f22'], 'l', { outline: null });
   c.tw = tw; return c;
@@ -853,9 +1398,9 @@ export function drawGameHUD(c, u, t) {
   drawPlate(c, u, px, 0, t, st);       landFlash(c, Hd.plate, PLATE.x + px, PLATE.y, t, HUD_TIMES.plate, D.plate);
   drawSign(c, u, 0, sy, t, st);        landFlash(c, Hd.sign, SIGN.x, SIGN.y + sy, t, HUD_TIMES.sign, D.sign);
   drawPurse(c, u, pux, 0, t, st);      landFlash(c, Hd.purse, PURSE.x + pux, PURSE.y, t, HUD_TIMES.purse, D.purse);
-  if ((st.level || 1) < 2) drawNext(c, u, nx, 0, t);           // Beat 9: once level 2 lands, the "next" preview has served its turn
+  drawNext(c, u, nx, 0, t);
   drawHeroGauge(c, t, HUD_TIMES.next, st);
-  drawBelt(c, u, 0, by, t);        landFlash(c, Hd.belt, BELT.x, BELT.y + by, t, HUD_TIMES.belt, D.belt);
+  drawBelt(c, u, 0, by, t, st);        landFlash(c, Hd.belt, BELT.x, BELT.y + by, t, HUD_TIMES.belt, D.belt);
 
   // goals pop in last, each with a little drop + settle
   const tag = (img, X, Y, at, text) => {
@@ -866,6 +1411,7 @@ export function drawGameHUD(c, u, t) {
     return true;
   };
   if ((st.level || 1) < 2) tag(Hd.soon, PLATE.x + 44, PLATE.y + 38, HUD_TIMES.soon, Hd.text.soon);
+  else drawSurgeBtn(c, u, SURGE_BTN.x + px, SURGE_BTN.y, t, st);
   if (t >= HUD_TIMES.route) {
     const k = clamp(inv(HUD_TIMES.route, HUD_TIMES.route + 0.3, t));
     c.globalAlpha = k; drawRoute(c, k > 0.5 ? u : null, 0, Math.round((1 - easeOut(k)) * -5), t, st); c.globalAlpha = 1;
@@ -873,9 +1419,50 @@ export function drawGameHUD(c, u, t) {
   const bob = t > HUD_TIMES.now + 0.4 ? Math.round(Math.sin(t * 2.6) * 0.75) : 0;
   const hopN = trainPulse && (t % 1.2) < 0.3 ? -Math.round(Math.sin((t % 1.2) / 0.3 * Math.PI) * 3) : 0;
   const nowX = BELT.x + BELT.w - Hd.now.width + 1, nowY = BELT.y - 6 + bob + hopN;
-  if (!trainOpen && tag(Hd.now, nowX, nowY, HUD_TIMES.now, Hd.text.now) && t >= HUD_TIMES.now + 0.3) {
+  const nowVisible = !trainOpen && t >= HUD_TIMES.now;
+  if (nowVisible && tag(Hd.now, nowX, nowY, HUD_TIMES.now, Hd.text.now) && t >= HUD_TIMES.now + 0.3) {
+    nowRect = { x: nowX, y: nowY, w: Hd.now.width, h: 14 };
+    const afford = !tileLock.train && st.cp >= nowCost;
+    const ax = nowX + Hd.now.width - 14, ay = nowY + 1;
+    nowBuyRect = { x: ax - 2, y: ay - 2, w: 16, h: 16 };
+    // Quick-buy upward arrow compartment on the right end of the NOW tooltip
+    fill(c, O, ax, ay, 12, 12);
+    if (afford) {
+      const pulseG = 0.5 + 0.5 * Math.sin(t * 5.2);
+      fill(c, '#3e9228', ax + 1, ay + 1, 10, 10);
+      fill(c, pulseG > 0.5 ? '#8cf068' : '#6ed64e', ax + 1, ay + 1, 10, 1);
+      fill(c, '#266018', ax + 1, ay + 10, 10, 1);
+      // Upward pixel upgrade arrow
+      const ayOff = pulseG > 0.65 ? -1 : 0;
+      const ac = '#f8ffd8', ash = '#163810';
+      fill(c, ash, ax + 5, ay + 3 + ayOff, 2, 7);
+      fill(c, ash, ax + 3, ay + 5 + ayOff, 6, 2);
+      fill(c, ac, ax + 5, ay + 2 + ayOff, 2, 1);
+      fill(c, ac, ax + 4, ay + 3 + ayOff, 4, 1);
+      fill(c, ac, ax + 3, ay + 4 + ayOff, 6, 1);
+      fill(c, ac, ax + 5, ay + 5 + ayOff, 2, 4);
+    } else {
+      fill(c, '#3a3744', ax + 1, ay + 1, 10, 10);
+      fill(c, '#585464', ax + 1, ay + 1, 10, 1);
+      fill(c, '#26242e', ax + 1, ay + 10, 10, 1);
+      const ac = '#8e8a9c';
+      fill(c, ac, ax + 5, ay + 2, 2, 1);
+      fill(c, ac, ax + 4, ay + 3, 4, 1);
+      fill(c, ac, ax + 3, ay + 4, 6, 1);
+      fill(c, ac, ax + 5, ay + 5, 2, 4);
+    }
     const X = BELT.x + TILES[0] + 13, Y = nowY + 14;     // pointer down to the Train tile
     fill(c, O, X - 3, Y, 7, 1); fill(c, O, X - 2, Y + 1, 5, 1); fill(c, O, X - 1, Y + 2, 3, 1);
     fill(c, PARCH[3], X - 2, Y, 5, 1); fill(c, PARCH[3], X - 1, Y + 1, 3, 1); fill(c, PARCH[3], X, Y + 2, 1, 1);
+    // Brief confirmation text right above the quick-buy arrow
+    const nf = performance.now() / 1000 - nowFlashAt;
+    if (nf >= 0 && nf < 0.9 && nowFlashLbl) {
+      const fy = nowY - 7 - Math.round(nf * 10);
+      c.save(); c.globalAlpha = clamp(1 - nf / 0.9);
+      num(c, nowFlashLbl, ax + 6, fy, ['#8cf068', '#f8ffd8'], 'c', { outline: '#14280e' });
+      c.restore();
+    }
+  } else {
+    nowRect = null; nowBuyRect = null;
   }
 }

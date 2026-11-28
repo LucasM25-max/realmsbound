@@ -50,9 +50,9 @@ export function started() { return !!D && D.lineAt !== null; }
 // ---------- the interlude: two more rats, so the bar can prove itself ----------
 function spawn() {
   const A = cb.addRat({ burst: D.spawnAt, landX: 452, depth: 2, coins: 3, holdCoins: true, wary: true, b4: 0 });
-  A.meleeAt = cb.moveRat(A, A.landT + 0.1, cb.SLOT[0], { speed: 190 }); A.slot = 0;
+  A.meleeAt = cb.moveRat(A, A.landT + 0.1, cb.SLOT[0], { dur: 1.8 }); A.slot = 0;
   const B = cb.addRat({ burst: D.spawnAt + 0.8, landX: 486, depth: -2, coins: 2, holdCoins: true, wary: true, b4: 1 });
-  B.meleeAt = cb.moveRat(B, B.landT + 0.15, cb.SLOT[1], { speed: 190 }); B.slot = 1;
+  B.meleeAt = cb.moveRat(B, B.landT + 0.15, cb.SLOT[1], { dur: 1.8 }); B.slot = 1;
   D.rats = [A, B];
 }
 const alive = s => D.rats.filter(r => r.dieAt === undefined && s >= r.landT);
@@ -86,13 +86,13 @@ function heroTurn(s) {
       if (!r || r.dieAt !== undefined) { const n = cb.chooseTarget(s, sw.at); if (n >= 0) sw.rat = n; else cb.voidSwing(sw); }
       if (!sw.void && sw.hit) cb.damageRat(cb.E.rats[sw.rat], sw.at, sw.dmg, { kind: 'swing', sw });
     }
-    const left = alive(s).filter(r => isFinite(r.meleeAt));
+    const leftInReach = alive(s).some(r => r.meleeAt <= s + 0.05);
     D.round = null;
-    if (left.length) startRound(sw.at, sw.at + cb.RULES.round * (cb.E.roundMult || 1));
+    if (leftInReach) startRound(sw.at, sw.at + cb.RULES.round * (cb.E.roundMult || 1));
   }
 }
 
-// each rat in reach bites on its own, quicker clock
+// each rat in reach bites on its own, quicker clock (with Pack Tactics Advantage when 2+ rats engage)
 function ratTurns(s) {
   const live = alive(s);
   for (const r of live) {
@@ -100,7 +100,10 @@ function ratTurns(s) {
     if (r.nextBite === undefined) r.nextBite = r.meleeAt + 0.55 + D.rng() * 0.5;
     if (s >= r.nextBite - 0.3) {
       const at = r.nextBite;
-      cb.addBite({ at, rat: r.id, roll: 1 + Math.floor(D.rng() * 20), dmg: 1 + Math.floor(D.rng() * 4) });
+      const roll = cb.hasPackTactics(r, at)
+        ? Math.max(1 + Math.floor(D.rng() * 20), 1 + Math.floor(D.rng() * 20))
+        : 1 + Math.floor(D.rng() * 20);
+      cb.addBite({ at, rat: r.id, roll, dmg: 1 + Math.floor(D.rng() * 2) });
       r.nextBite = at + cb.RULES.ratRound + D.rng() * 0.4 - 0.15;
     }
   }
@@ -110,13 +113,15 @@ function ratTurns(s) {
 
 function tick(s) {
   if (!D.rats.length) return;
-  if (!D.roundUp && D.rats.some(r => s >= r.landT)) { D.roundUp = true; startRound(s, s + 0.9); }
+  const inReach = alive(s).some(r => r.meleeAt <= s + 0.05);
+  if (!D.round && inReach && D.rats.some(r => r.dieAt === undefined)) startRound(s, s + cb.RULES.round * (cb.E.roundMult || 1));
+  if (D.round && !D.round.sw && !inReach) { D.round.t0 += DT; D.round.full += DT; D.round.at += DT; }
   heroTurn(s);
   ratTurns(s);
 }
 
 export function step(t) {
-  if (!D || !cb.E) return;
+  if (!D || !cb.E || (cb.E.stage || 1) >= 2) return;
   const s = cb.warp(t);
   if (D.lastS !== null && s < D.lastS - 0.25) { const was = D.lineAt; const sd = D.seed; reset(sd); D.lastS = s; if (was !== null) DIALOGUE.line9.at = Infinity; }
   D.lastS = s;
@@ -143,7 +148,7 @@ export function step(t) {
 // ---------- overlays ----------
 // the spotlight: dim everything but the sign (drawn after the HUD, before the dialogue box)
 export function drawSpot(ctx, p, t) {
-  if (!D || D.lineAt === null) return;
+  if (!D || (cb.E?.stage || 1) >= 2 || D.lineAt === null) return;
   const s = cb.warp(t);
   const end = lineEnd(DIALOGUE.line9) + 0.9;
   if (s > end) return;
@@ -155,7 +160,7 @@ export function drawSpot(ctx, p, t) {
 
 // the gold wave rolling across the filled pockets, and the chevron pointing up at the count
 export function drawOverlay(ctx, uctx, p, t) {
-  if (!D || D.lineAt === null) return;
+  if (!D || (cb.E?.stage || 1) >= 2 || D.lineAt === null) return;
   const s = cb.warp(t);
   const end = lineEnd(DIALOGUE.line9) + 0.9;
   if (s > end) return;

@@ -74,25 +74,25 @@ const alive = s => D.rats.filter(r => r.dieAt === undefined && s >= r.landT);
 // ---------- input ----------
 // a click anywhere leaves a little ripple; a click on a Beat 2 rat queues a Command Strike
 export function click(gx, gy, t) {
-  if (!D) return false;
+  if (!D || (cb.E?.stage || 1) >= 2) return false;
   const s = cb.warp(t);
   const id = s >= START ? cb.ratAtPoint(gx, gy, s, off(1, F.ground), r => r.b2 !== undefined || r.gob !== undefined || r.b4 !== undefined) : -1;
   D.ripples.push({ t, gx, gy, hit: id >= 0 });
   if (D.ripples.length > 24) D.ripples.shift();
   if (id < 0) return false;
   const q = Math.max(s, D.s);
-  if (D.firstTap !== null) {
-    if (q - D.lastTapS < 0.14) return false;                       // hand throttle
-    if (q < D.lastStrikeAt + 2.2) return false;       // the gauntlet needs a breath between shouts (not a whole round)
-  }
   D.lastTapS = q;
+  if (q - D.lastStrikeAt < 0.25) {
+    cb.setFocus(q, id);
+    return true;
+  }
   D.lastStrikeAt = q;
   D.taps.push({ s: q, rat: id }); D.taps.sort((a, b) => a.s - b.s);
   return true;
 }
 let hoverPt = null;
 export function hover(gx, gy) { hoverPt = gx === null ? null : [gx, gy]; }
-export function wantsGauntlet(t) { return !!D && cb.warp(t) >= T.b2burst[0] && tappable(cb.warp(t)); }
+export function wantsGauntlet(t) { return !!D && (cb.E?.stage || 1) < 2 && cb.warp(t) >= T.b2burst[0] && tappable(cb.warp(t)); }
 export function ratPoints(t) {
   const s = cb.warp(t), og = off(1, F.ground);
   return D.rats.filter(r => cb.ratAlive(r, s)).map(r => { const st = cb.ratState(r, s, og); return { id: r.id, b2: r.b2, x: Math.round(st.x - 4), y: Math.round(st.gy - 12), hp: cb.ratHP(r, s) }; });
@@ -106,6 +106,7 @@ export function debug() {
 // ---------- the director ----------
 export function step(t) {
   if (!D) reset();
+  if ((cb.E?.stage || 1) >= 2) return;
   const s = cb.warp(t);
   if (s < D.s - 0.25 && s >= START) reset(D.seed);      // scrubbed backwards: replay from the top of Beat 2
   if (s < START) {
@@ -130,7 +131,10 @@ function tick(s) {
     const tp = D.taps[D.ti++];
     const rid = tp.rat ?? (D.rats[tp.b2] ? D.rats[tp.b2].id : -1);
     const r = cb.E.rats[rid];
-    if (r && (r.b2 !== undefined || r.gob !== undefined || r.b4 !== undefined) && cb.ratAlive(r, tp.s)) commandStrike(tp.s, r);
+    if (r && (r.b2 !== undefined || r.gob !== undefined || r.b4 !== undefined) && cb.ratAlive(r, tp.s)) {
+      if (tp.s - D.lastCS >= 0.249) commandStrike(tp.s, r);
+      else cb.setFocus(tp.s, r.id);
+    }
   }
   // tutorial nudges while nobody has clicked
   if (D.firstTap === null && D.phase === 'standoff') {
@@ -138,6 +142,9 @@ function tick(s) {
     if (s >= D.spotAt + NUDGE.pulse && s >= D.chimeAt) { cueLive(s, 'chime'); D.chimeAt = s + 2.5; }
     if (s >= D.spotAt + NUDGE.give) aggro(s);
   }
+  const inReach = alive(s).some(r => r.meleeAt <= s + 0.05);
+  if (!D.round && inReach && !D.doneAt) startRound(s, s + cb.RULES.round * (cb.E.roundMult || 1));
+  if (D.round && !D.round.sw && !inReach) { D.round.t0 += DT; D.round.full += DT; D.round.at += DT; }
   heroTurn(s);
   ratTurns(s);
   regen(s);
@@ -153,15 +160,13 @@ function say(key, s) { DIALOGUE[key].at = s; cueLive(s - 0.05, 'paper'); }
 function cueLive(s, k, o = {}) { cb.E.live.push({ s, k, ...o }); }
 
 function commandStrike(s, r) {
-  if (s - D.lastCS < 0.09) return;                         // even a fighter can only bark so fast
   D.lastCS = s;
   D.lastStrikeAt = s;
   const count = 1 + (cb.E.extraStrikes || 0);
   for (let k = 0; k < count; k++) {
     const tgt = r.dieAt === undefined ? r : alive(s)[0];
     if (!tgt) break;
-    const roll = 2 + Math.floor(D.rng() * 6) + Math.floor(D.rng() * 6) + cb.RULES.dmgBonus;   // a weapon hit…
-    const dmg = Math.max(1, Math.round(roll * cb.RULES.csPct * (cb.E.strikeMult || 1)));       // …10% of it (scaled by Tactics)
+    const dmg = Math.max(1, Math.ceil(10 * cb.RULES.csPct * (cb.E.strikeMult || 1)));       // 10% of avg base weapon hit (10) -> 1 dmg at R0
     const n = D.n++;
     const word = n === 0 ? 'HA!' : ['HA!', 'HUP!', 'HA!', 'HAH!', 'OI!'][Math.floor(D.rng() * 5)];
     if (k === 0) cb.setFocus(s, tgt.id);
@@ -183,15 +188,13 @@ function aggro(s) {
   if (D.aggroAt) return;
   D.aggroAt = s; D.phase = 'fight';
   const live = alive(s).sort((a, b) => cb.baseX(a, s).x - cb.baseX(b, s).x);
-  let first = Infinity;
   live.forEach((r, i) => {
     r.aggroAt = s; r.slot = i;
-    const at = cb.moveRat(r, s + i * 0.2, cb.SLOT[i], { speed: 175, kind: 'dash' });
-    r.meleeAt = at; first = Math.min(first, at);
+    const at = cb.moveRat(r, s + i * 0.2, cb.SLOT[i], { dur: 1.8, kind: 'dash' });
+    r.meleeAt = at;
     cueLive(s + i * 0.2 + 0.02, 'squeak', { pan: 0.3 });
   });
   for (const r of D.rats) if (r.dieAt !== undefined) r.aggroAt = s;
-  if (isFinite(first)) startRound(s, first + 0.95);
 }
 function startRound(t0, at) { D.round = { t0, full: at, at }; cb.E.rounds.push(D.round); }
 
@@ -224,13 +227,13 @@ function heroTurn(s) {
       if (!r || r.dieAt !== undefined) { const n = cb.chooseTarget(s, sw.at); if (n >= 0) sw.rat = n; else cb.voidSwing(sw); }
       if (!sw.void && sw.hit) cb.damageRat(cb.E.rats[sw.rat], sw.at, sw.dmg, { kind: 'swing', sw });
     }
-    const left = alive(s).filter(r => isFinite(r.meleeAt));
+    const leftInReach = alive(s).some(r => r.meleeAt <= s + 0.05);
     D.round = null;
-    if (left.length) startRound(sw.at, sw.at + cb.RULES.round * (cb.E.roundMult || 1));
+    if (leftInReach) startRound(sw.at, sw.at + cb.RULES.round * (cb.E.roundMult || 1));
   }
 }
 
-// each rat in reach bites on its own, quicker clock
+// each rat in reach bites on its own, quicker clock (with Pack Tactics Advantage when 2+ rats engage)
 function ratTurns(s) {
   const live = alive(s);
   for (const r of live) {
@@ -238,7 +241,10 @@ function ratTurns(s) {
     if (r.nextBite === undefined) r.nextBite = r.meleeAt + 0.55 + D.rng() * 0.5;
     if (s >= r.nextBite - 0.3) {
       const at = r.nextBite;
-      cb.addBite({ at, rat: r.id, roll: 1 + Math.floor(D.rng() * 20), dmg: 1 + Math.floor(D.rng() * 4) });
+      const roll = cb.hasPackTactics(r, at)
+        ? Math.max(1 + Math.floor(D.rng() * 20), 1 + Math.floor(D.rng() * 20))
+        : 1 + Math.floor(D.rng() * 20);
+      cb.addBite({ at, rat: r.id, roll, dmg: 1 + Math.floor(D.rng() * 2) });
       r.nextBite = at + cb.RULES.ratRound + D.rng() * 0.4 - 0.15;
     }
   }

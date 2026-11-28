@@ -11,11 +11,17 @@ import { heroFootsteps, RUSTLES } from './actors.js';
 import { combatCues, CB } from './combat.js';
 import { mulberry } from './util.js';
 import { HUD_TIMES } from './hud.js';
+import { VOICE_BARKS, findOption } from './progression.js';
 
 const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
 
 export class AudioEngine {
-  constructor() { this.ctx = null; this.voices = {}; this.muted = false; }
+  constructor() { this.ctx = null; this.voices = {}; this.muted = false; this.heroVoice = 'gruff'; }
+  setHeroVoice(id) { this.heroVoice = findOption(VOICE_BARKS, id).id; }
+  previewBark(id = this.heroVoice) {
+    if (!this.ctx || !this.session) return;
+    this.shout(this.ctx.currentTime + 0.01, Math.floor(Math.random() * 5), id);
+  }
 
   async init() {
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -387,6 +393,21 @@ export class AudioEngine {
       case 'tink': this.bell(at, 2900 + c.i * 140, 0.012, 0.18, 2.76, 0.3); break;
       case 'clink': { const f = 1568 * Math.pow(2, c.i * 2 / 12); this.bell(at, f, 0.028, 0.45, 2.76, 0.8); this.bell(at + 0.03, f * 1.5, 0.012, 0.3, 2.76, 0.8); break; }
       case 'xp': this.bell(at, 1760, 0.016, 0.6, 1.0, -0.6); this.bell(at + 0.07, 2637, 0.012, 0.6, 1.0, -0.6); break;
+      case 'levelup':
+        [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) => this.bell(at + i * 0.075, f, 0.032, 1.15, 1.5, 0));
+        this.shimmer(at + 0.12, 0.85, 0.02);
+        this.timpani(at, 43, 0.28);
+        break;
+      case 'surge':
+        this.shing(at);
+        this.bell(at + 0.03, 987.77, 0.028, 0.55, 1.41, -0.2);
+        this.bell(at + 0.09, 1479.98, 0.024, 0.65, 1.41, -0.1);
+        this.whoosh(at + 0.04, 0.24, 0.16);
+        break;
+      case 'potion':
+        this.pop(at);
+        [587.33, 739.99, 880, 1174.66].forEach((f, i) => this.bell(at + 0.05 + i * 0.055, f, 0.022, 0.65, 1.0, 0.15));
+        break;
     }
   }
   thump(at, f, vel) { const c = this.ctx, o = this.osc('sine', f * 1.6, at, 0.3), g = c.createGain(); o.frequency.exponentialRampToValueAtTime(f * 0.6, at + 0.18); o.connect(g); g.connect(this.session.sfx); this.env(g, at, 0.003, vel, 0.22); }
@@ -407,12 +428,18 @@ export class AudioEngine {
     const o = this.osc('sine', 160, at, 0.25), og = c.createGain(); o.frequency.exponentialRampToValueAtTime(45, at + 0.2); o.connect(og); og.connect(this.session.sfx); this.env(og, at, 0.002, 0.3, 0.2);
     const sg = c.createGain(); sg.gain.value = 0.5; g.connect(sg); sg.connect(this.session.rev);
   }
-  // the hero's bark: a short, punchy formant burst ("HA!") with a breathy onset; pitch wanders a little per shout
-  shout(at, i) {
-    const c = this.ctx, f0 = 150 + ((i * 37) % 5) * 9;
-    const o = this.osc('sawtooth', f0 * 1.15, at, 0.3); o.frequency.exponentialRampToValueAtTime(f0 * 0.9, at + 0.2);
+  // the hero's bark: a short, punchy formant burst ("HA!") parameterized by chosen voice personality
+  shout(at, i, voiceId = this.heroVoice) {
+    const c = this.ctx, vb = findOption(VOICE_BARKS, voiceId || this.heroVoice);
+    const f0 = vb.f0 + ((i * 37) % 5) * 7;
+    const o = this.osc('sawtooth', f0 * 1.12, at, 0.3);
+    o.frequency.exponentialRampToValueAtTime(f0 * vb.sweep, at + 0.2);
     const mix = c.createGain(), out = this.panner(-0.15, this.session.sfx);
-    for (const [f, q, g0] of [[760, 6, 1], [1250, 8, 0.6], [2600, 10, 0.25]]) { const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = q; const g = c.createGain(); g.gain.value = g0; o.connect(bp); bp.connect(g); g.connect(mix); }
+    const gains = [1, 0.6, 0.25], qs = [6, 8, 10];
+    vb.formants.forEach((f, idx) => {
+      const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = qs[idx];
+      const g = c.createGain(); g.gain.value = gains[idx]; o.connect(bp); bp.connect(g); g.connect(mix);
+    });
     mix.connect(out); this.env(mix, at + 0.02, 0.015, 0.5, 0.16);
     const n = this.nz(at, 0.08), hp = c.createBiquadFilter(); hp.type = 'bandpass'; hp.frequency.value = 1600; hp.Q.value = 0.8;
     const ng = c.createGain(); n.connect(hp); hp.connect(ng); ng.connect(out); this.env(ng, at, 0.005, 0.05, 0.06);

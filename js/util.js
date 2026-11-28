@@ -66,12 +66,15 @@ export function pxEllipse(ctx, cx, cy, rx, ry, color) {
 
 // Render text to an offscreen canvas and hard-threshold alpha so pixel fonts stay crisp
 export function crispText(text, font, color, opts = {}) {
-  const [m, mx] = makeCanvas(8, 8);
+  const m = document.createElement('canvas'); m.width = 8; m.height = 8;
+  const mx = m.getContext('2d');
   mx.font = font;
   const w = Math.ceil(mx.measureText(text).width) + 8 + (opts.spacing || 0) * text.length;
   const size = parseInt(font.match(/(\d+)px/)[1], 10);
   const h = Math.ceil(size * 1.5) + 6;
-  const [c, x] = makeCanvas(w, h);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.imageSmoothingEnabled = false;
   x.font = font; x.textBaseline = 'top'; x.fillStyle = color;
   if (opts.spacing) {
     let px = 4;

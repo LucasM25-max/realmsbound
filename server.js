@@ -50,9 +50,7 @@ app.use((req, res, next) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   if (req.url.startsWith('/b/')) {
-    const rest = req.url.slice(3).split('/');
-    rest.shift();
-    req.url = '/' + rest.join('/');
+    req.url = req.url.replace(/^\/b\/[^/?#]+/, '') || '/';
   }
   next();
 });

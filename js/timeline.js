@@ -108,7 +108,18 @@ Object.assign(DIALOGUE, {
   line14b: live('*snort* …It suits thee, sellsword. Gods help thee.'),
   gearNudge: live('The Gear tab, sellsword. Bottom right, the little pack. Gear changes thee — wear thy spoils.'),
   // Beat 9: Stage 1 closing word (beat9.js sets .at)
-  line15: live('Ten foes cleared — well on thy way to Level Two, sellsword. Keep swinging!'),
+  line15: live('Ten foes cleared — nearly halfway to Level Two, sellsword. Keep swinging!'),
+  // Beat 10 & 10b & Stage 2 (stage2.js sets .at)
+  line16: live("Old Skull Meadow's quiet. Push on down the road — the gate's unlocked."),
+  nextNudge: live('That wooden tab on the right, sellsword. Give it a poke.'),
+  line17: live("Right — I've been calling thee 'sellsword' for three minutes. Give thyself a proper name and look before Hedrun's fields see thee."),
+  stage2Open: live("Hedrun's turnip fields! Armour Drills and Scavenging are open at the yard — hit harder, bleed less, pocket faster."),
+  stage2Clear: live("Hedrun's turnips are safe — for an hour or two. Rest easy, sellsword; the road deeper into Shadowdale opens anon!"),
+  stage3Open: live("Hedrun's cider barn! Rats in the barrels, beetles under the eaves. Footwork's unlocked at the yard — step lightly, sellsword!"),
+  level2Up: live("LEVEL TWO! Action Surge's thine — two turns for the price of one! Plus Tactical Mind to steady failing skill checks."),
+  surgePrompt: live("A crowd! Press that glowing Action Surge button!"),
+  surgeShortRest: live("Recharges after a boss, or every minute and a half of scrapping."),
+  stage3Clear: live("Three Healing Potions from grateful Hedrun! Tuck them into thy belt — press two if things get dicey."),
   // milestone quips: two tiers per track (beat6.js sets .at when a ×2-style rank is crossed)
   mq_weapon_0: live('Twice the blow. That pell has a family, thou knowest.'),
   mq_weapon_1: live('Harder still. The rats of Shadowdale grow nervous.'),
@@ -119,7 +130,7 @@ Object.assign(DIALOGUE, {
   mq_tactics_0: live('A keener eye. Strike where it hurts. It always hurts the rats.'),
   mq_tactics_1: live('Critically improved. My condolences to the vermin.'),
   mq_scavenging_0: live("The true adventurer's art: finding what the fallen drop."),
-  mq_scavenging_1: live('The copper picks itself up now. Would that my tower tidied itself so.'),
+  mq_scavenging_1: live('There. No more grovelling for coppers.'),
   mq_conditioning_0: live('Deeper breath, steadier heart. Do not test it overmuch.'),
   mq_conditioning_1: live('Thy stamina shames archmages I could name. I shall not.'),
 });

@@ -23,7 +23,22 @@ const SACK = P(['#3a2a14', '#54401e', '#70582c', '#8c703a', '#a98a4c']);
 const BLADE = P(['#4a3a28', '#7a5a3a', '#a8824e', '#c8a06a', '#e8d8b0']);   // rusty: brown iron
 const OUT = C('#121018');
 
-function torso(R, bx, by, lean) {
+const TURNIP_P = P(['#3e1b46', '#683072', '#944a9c', '#bc6ebc']);
+const TURNIP_I = P(['#9c8e78', '#d4c8ae', '#f2e8d4', '#fffcf0']);
+const TURNIP_G = P(['#224a18', '#387424', '#589c34', '#80c248']);
+
+function paintTurnipSprite(R, cx, cy, scale = 1) {
+  const rx = 2.8 * scale, ry = 2.6 * scale;
+  R.ellipse(cx, cy, rx, ry, (x, y, u, v) => v < -0.05
+    ? ramp(TURNIP_P, clamp(0.62 - u * 0.25 - v * 0.2), x, y, 0)
+    : ramp(TURNIP_I, clamp(0.66 - u * 0.25 - v * 0.2), x, y, 0));
+  R.set(Math.round(cx), Math.round(cy + ry), TURNIP_I[1]);
+  R.line(cx, cy - ry, cx - 2, cy - ry - 3, TURNIP_G[1]);
+  R.line(cx, cy - ry, cx, cy - ry - 3.5, TURNIP_G[2]);
+  R.line(cx, cy - ry, cx + 2, cy - ry - 3, TURNIP_G[3]);
+}
+
+function torso(R, bx, by, lean, turnip = false) {
   // hunched little body in rags
   R.ellipse(bx, by, 6.0, 7.4, (x, y, u, v) => ramp(TUNIC, clamp(0.55 - v * 0.38 + u * 0.1 + (h2(x, y, 7) < 0.12 ? 0.12 : 0)), x, y, 0.5));
   // ragged hem
@@ -32,12 +47,20 @@ function torso(R, bx, by, lean) {
   R.line(bx - 5, by + 2.6, bx + 5, by + 3, C('#c9a86a'));
   // the sack of stolen veg slung over his far shoulder, bulging behind him
   const sx = bx + 6.5, sy = by - 4;
-  R.ellipse(sx, sy, 4.6, 5.2, (x, y, u, v) => ramp(SACK, clamp(0.5 - v * 0.34 - u * 0.1 + (h2(x, y, 13) < 0.15 ? 0.1 : 0)), x, y, 0.5));
+  R.ellipse(sx, sy, turnip ? 5.2 : 4.6, turnip ? 5.8 : 5.2, (x, y, u, v) => ramp(SACK, clamp(0.5 - v * 0.34 - u * 0.1 + (h2(x, y, 13) < 0.15 ? 0.1 : 0)), x, y, 0.5));
   R.line(bx - 2, by - 6, sx - 1, sy + 3, darken(SACK[1], 0.12));                       // the strap across his chest
   R.set(Math.round(sx) - 2, Math.round(sy) - 5, SACK[3]);                              // the knot
-  // a stolen carrot and a turnip top poke out of the sack
-  R.line(sx + 1, sy - 5, sx + 3.5, sy - 8.5, C('#d8782a')); R.set(Math.round(sx + 4), Math.round(sy - 9), C('#f09038'));
-  R.set(Math.round(sx + 2), Math.round(sy - 7), C('#5c8a3a')); R.set(Math.round(sx + 3), Math.round(sy - 6), C('#6a9a46'));
+  if (turnip) {
+    // overflowing stolen turnips bursting out of the top & side of his sack
+    paintTurnipSprite(R, sx - 0.5, sy - 6.0, 1.0);
+    paintTurnipSprite(R, sx + 3.2, sy - 3.8, 0.85);
+    // plus one fat stolen turnip tucked firmly under his belt / arm!
+    paintTurnipSprite(R, bx - 1.5, by + 0.5, 0.92);
+  } else {
+    // a stolen carrot and a turnip top poke out of the sack
+    R.line(sx + 1, sy - 5, sx + 3.5, sy - 8.5, C('#d8782a')); R.set(Math.round(sx + 4), Math.round(sy - 9), C('#f09038'));
+    R.set(Math.round(sx + 2), Math.round(sy - 7), C('#5c8a3a')); R.set(Math.round(sx + 3), Math.round(sy - 6), C('#6a9a46'));
+  }
 }
 
 function legG(R, hx, hy, ang, len, far) {
@@ -122,7 +145,8 @@ function head(R, bx, by, lean, helm, mouthOpen, snik) {
 
 // mode: 'run' (ph 0..3) | 'leap' | 'crouch' | 'bite' (the stab) | 'hit'
 // snik: Snikkit — pie tin for a helm, a stolen pie for a dagger
-export function goblinFrame(mode, ph = 0, snik = false) {
+// turnip: Stage 2 turnip raider — sack & arm brimming with stolen purple-ivory turnips
+export function goblinFrame(mode, ph = 0, snik = false, turnip = false) {
   const R = new Raster(GOB_W, GOB_H);
   const run = mode === 'run';
   const bob = run ? [0, 1.5, 0, -0.5][ph] : mode === 'crouch' ? 1.5 : mode === 'hit' ? -1 : 0;
@@ -134,7 +158,7 @@ export function goblinFrame(mode, ph = 0, snik = false) {
   const hipY = by + 4.5, footY = mode === 'leap' ? GOB_FEET - 5 : GOB_FEET;
   legG(R, bx + 2.2, hipY, fA, Math.max(3, footY - hipY), true);
   legG(R, bx - 2.2, hipY + 0.5, hA, Math.max(3, footY - hipY), false);
-  torso(R, bx, by, lean);
+  torso(R, bx, by, lean, turnip);
   // the dagger arm: pumps with the gait, pulled back in crouch, driven forward in the stab
   // (Snikkit's hand is otherwise engaged: the pie rides high, wobbling as he runs)
   const dA = snik
@@ -193,13 +217,13 @@ export function peekFrame(snik = false) {
   return R;
 }
 
-export function buildGoblin(snik = false) {
-  const run = [0, 1, 2, 3].map(i => goblinFrame('run', i, snik).toCanvas());
-  const hit = goblinFrame('hit', 0, snik).toCanvas();
+export function buildGoblin(snik = false, turnip = false) {
+  const run = [0, 1, 2, 3].map(i => goblinFrame('run', i, snik, turnip).toCanvas());
+  const hit = goblinFrame('hit', 0, snik, turnip).toCanvas();
   // a crisp half-scale hit frame for the far end of the crit launch (nearest-neighbour downsample)
   const half = document.createElement('canvas'); half.width = GOB_W / 2; half.height = GOB_H / 2;
   const hx = half.getContext('2d'); hx.imageSmoothingEnabled = false; hx.drawImage(hit, 0, 0, GOB_W / 2, GOB_H / 2);
-  return { run, leap: goblinFrame('leap', 0, snik).toCanvas(), crouch: goblinFrame('crouch', 0, snik).toCanvas(),
-    bite: goblinFrame('bite', 0, snik).toCanvas(), hit, hitHalf: half,
+  return { run, leap: goblinFrame('leap', 0, snik, turnip).toCanvas(), crouch: goblinFrame('crouch', 0, snik, turnip).toCanvas(),
+    bite: goblinFrame('bite', 0, snik, turnip).toCanvas(), hit, hitHalf: half,
     helm: ['dome', 'flat', 'under'].map(f => helmFrame(f).toCanvas()), peek: peekFrame(snik).toCanvas() };
 }

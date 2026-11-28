@@ -20,12 +20,27 @@
   </div>
     <div id="build" aria-hidden="true">build __BUILD__ · __BUILT__</div>
   <script type="module">
-    // cache-proof boot: load this build's modules from a versioned path (see tools/serve.py);
-    // fall back to the plain path when the page is served by something else
+    // cache-proof boot: load this build's modules from a versioned path;
+    // retry cleanly on transient dev-server restart / proxy hiccups
     const B = '__BUILD__';
     window.__BUILD = B;
     if (B.startsWith('__')) document.getElementById('build').textContent = 'build: local';
-    import(B.startsWith('__') ? './js/main.js' : `./b/${B}/js/main.js`).catch(e => { console.warn('versioned load failed', e); return import('./js/main.js'); });
+    const primary = B.startsWith('__') ? './js/main.js' : `./b/${B}/js/main.js`;
+    const fallback = B.startsWith('__') ? './js/main.js?v=local' : `./js/main.js?v=${B}`;
+    (async () => {
+      const urls = [primary, fallback, fallback];
+      let lastErr;
+      for (let i = 0; i < urls.length; i++) {
+        try {
+          await import(urls[i]);
+          return;
+        } catch (err) {
+          lastErr = err;
+          if (i < urls.length - 1) await new Promise(r => setTimeout(r, 350 * (i + 1)));
+        }
+      }
+      console.error('Failed to boot module', lastErr);
+    })();
   </script>
 </body>
 </html>
